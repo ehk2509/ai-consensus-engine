@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDebateSession, executeDebate, validateDebateRequest } from '../packages/core/src/debate.ts';
+import { createDebateSession, executeDebate, validateDebateRequest, recommendedTurnTimeoutMs } from '../packages/core/src/debate.ts';
 import type { DebateSession } from '../packages/core/src/debate.ts';
 import type { AgentAdapter, ProviderId } from '../packages/core/src/types.ts';
 
@@ -158,4 +158,39 @@ test('rejects invalid total call and time budgets', () => {
   for (const values of [{ maxCalls: 41 }, { maxCalls: 1 }, { maxDurationMs: 9000 }, { maxDurationMs: 1900000 }]) {
     assert.throws(() => validateDebateRequest({ ...ideas, ...values }));
   }
+});
+
+test('revision timeout increases for later rounds without crossing the session deadline', async () => {
+  assert.equal(recommendedTurnTimeoutMs('proposal', 0), 150000);
+  assert.equal(recommendedTurnTimeoutMs('critique', 3), 150000);
+  assert.equal(recommendedTurnTimeoutMs('revision', 1), 180000);
+  assert.equal(recommendedTurnTimeoutMs('revision', 2), 210000);
+  assert.equal(recommendedTurnTimeoutMs('revision', 3), 240000);
+  const session = createDebateSession({ ...ideas, providers: ['codex', 'claude'], maxRounds: 3, maxDurationMs: 10000 });
+  const seen: Array<{ stage: string; timeoutMs?: number }> = [];
+  const adapters = new Map<string, AgentAdapter>(['codex', 'claude'].map(id => [id, {
+    id: id as ProviderId,
+    propose: async (prompt: string, _signal?: AbortSignal, options?: {timeoutMs?: number}) => {
+      seen.push({ stage: prompt.includes('Stage: REVISE') ? 'revision' : 'other', timeoutMs: options?.timeoutMs });
+      return 'A measured answer';
+    },
+  }]));
+  await executeDebate(session, adapters, async () => {});
+  const revision = seen.filter(x => x.stage === 'revision');
+  assert.equal(revision.length, 6);
+  assert.ok(revision.every(x => x.timeoutMs !== undefined && x.timeoutMs > 0 && x.timeoutMs <= 10000));
+});
+
+test('late-round revision prompts are explicitly bounded rather than endlessly copying full history', async () => {
+  const session = createDebateSession({ ...ideas, providers: ['codex', 'claude', 'gemini'], maxRounds: 3 });
+  const lengths: number[] = [];
+  await executeDebate(session, adaptersWith((_id, prompt) => {
+    if (prompt.includes('Stage: REVISE, round 3')) {
+      lengths.push(prompt.length);
+      assert.match(prompt, /below 1,800 words/);
+    }
+    return 'long proposal '.repeat(1800);
+  }), async () => {});
+  assert.equal(lengths.length, 3);
+  assert.ok(lengths.every(length => length < 30000));
 });

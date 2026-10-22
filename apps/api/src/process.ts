@@ -3,8 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const MAX_OUTPUT_BYTES = 768 * 1024;
-const MAX_ERROR_BYTES = 32 * 1024;
+// Stream-json CLIs include non-final events; keep an explicit hard cap on buffered stdout.
+const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+// stderr is drained and discarded: CLI progress logging must not terminate a valid response.
 
 export class AgentExecutionError extends Error {
   constructor(message: string) { super(message); this.name = 'AgentExecutionError'; }
@@ -36,6 +37,9 @@ function terminateTree(pid: number | undefined, fallback: () => void): void {
 
 /** Shell-free, bounded and best-effort process-tree-isolated CLI invocation. */
 export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
+  if (!Number.isFinite(spec.timeoutMs) || spec.timeoutMs <= 0) {
+    throw new AgentExecutionError('Invalid provider timeout.');
+  }
   const cwd = await mkdtemp(join(tmpdir(), 'ace-agent-'));
   try {
     return await new Promise<string>((resolve, reject) => {
@@ -46,7 +50,6 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
       });
       const stdout: Buffer[] = [];
       let size = 0;
-      let errorSize = 0;
       let timedOut = false;
       let aborted = false;
       let exceeded = false;
@@ -67,8 +70,7 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
         else stdout.push(chunk);
       });
       child.stderr.on('data', (chunk: Buffer) => {
-        errorSize += chunk.length;
-        if (errorSize > MAX_ERROR_BYTES) { exceeded = true; terminate(); }
+        void chunk; // Drain stderr without buffering or leaking auth-sensitive diagnostics.
       });
       child.on('error', (error: NodeJS.ErrnoException) => { spawnError = error; });
       child.on('close', (code) => {

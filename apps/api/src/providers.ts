@@ -1,4 +1,4 @@
-import type { AgentAdapter, ProviderId } from '../../../packages/core/src/types.ts';
+import type { AgentAdapter, AgentInvocationOptions, ProviderId } from '../../../packages/core/src/types.ts';
 import { runAgentProcess, AgentExecutionError } from './process.ts';
 
 /** Antigravity (`agy`) print mode only reads stdin as stream-json, one NDJSON user message per turn. */
@@ -49,7 +49,7 @@ export async function probeInstalledClis(): Promise<Array<{ id: ProviderId; inst
   }));
 }
 
-export function createAdapters(timeoutMs = 90000): Map<string, AgentAdapter> {
+export function createAdapters(timeoutMs = 150000): Map<string, AgentAdapter> {
   const specifications: Record<ProviderId, { executable: string; args: string[]; encodeStdin?: (text: string) => string }> = {
     codex: { executable: 'codex', args: ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', '-'] },
     claude: { executable: 'claude', args: ['-p', '--output-format', 'json', '--tools', '', '--disallowedTools', 'mcp__*', '--max-turns', '1'] },
@@ -58,9 +58,9 @@ export function createAdapters(timeoutMs = 90000): Map<string, AgentAdapter> {
   };
   return new Map(Object.entries(specifications).map(([id, { encodeStdin, ...spec }]) => [id, {
     id: id as ProviderId,
-    async propose(prompt: string, signal?: AbortSignal): Promise<string> {
+    async propose(prompt: string, signal?: AbortSignal, options?: AgentInvocationOptions): Promise<string> {
       const text = prompt;
-      const raw = await runAgentProcess({ ...spec, stdin: encodeStdin ? encodeStdin(text) : text, timeoutMs, signal });
+      const raw = await runAgentProcess({ ...spec, stdin: encodeStdin ? encodeStdin(text) : text, timeoutMs: options?.timeoutMs ?? timeoutMs, signal });
       return extractResponse(id as ProviderId, raw);
     },
   }]));

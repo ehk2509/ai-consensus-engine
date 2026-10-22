@@ -4,7 +4,7 @@
 
 Local-first, multi-provider brainstorming and structured AI deliberation powered by your installed **OpenAI Codex**, **Claude Code**, and **Gemini through Antigravity** CLI sessions.
 
-> **Current milestone: M2 — iterative debate, NOT final consensus.** M1's independent brainstorming remains available. M2 adds targeted peer critique, individual rebuttals, full revisions, local session history, and live updates. Consensus voting and consolidated verdicts will be delivered in M3.
+> **Current milestone: M3 — explicit consensus evaluation.** Following independent proposals, critiques, rebuttals and revisions, the optional M3 council drafts a shared proposal, gathers independently structured votes, and produces a transparent decision record. Agreement is never fabricated when ballots fail or critical concerns remain.
 
 ## Quick start
 
@@ -30,7 +30,7 @@ Each targeted critique requests structured JSON objections, with stable IDs and 
 
 Critiques for one provider are deliberately serialized to avoid launching multiple concurrent sessions under that same CLI account; different providers can work in parallel. When a provider fails, the session keeps successful results and does not invent missing replies. If fewer than two initial proposals succeed, no debate is attempted. **Unanimity is neither calculated nor asserted in M2.**
 
-**Usage:** with three providers, a single round makes up to 15 model calls (3 proposals, 6 targeted critiques, 3 rebuttals, 3 revisions). Two rounds can make up to 27 calls. Each call can consume account quota or incur costs depending on your CLI and provider terms. A debate defaults to a **40-call** and **15-minute** total budget, configurable up to 40 calls and 30 minutes; budget exhaustion is reported distinctly. Cancel an active session using the UI or API.
+**Usage:** with three providers, a single round makes up to 15 model calls (3 proposals, 6 targeted critiques, 3 rebuttals, 3 revisions). Two rounds can make up to 27 calls. Each call can consume account quota or incur costs depending on your CLI and provider terms. A debate defaults to a **40-call** and **15-minute** total budget, configurable up to 40 calls and 30 minutes; selecting two or three rounds in the UI adjusts the suggested time budget to 20 or 30 minutes. Budget exhaustion is reported distinctly. Cancel an active session using the UI or API.
 
 ## API
 
@@ -44,6 +44,7 @@ The Fastify API listens on `127.0.0.1:8787` and is unauthenticated: do not expos
 - `GET /api/debates/:id` — full timeline and stage outputs
 - `GET /api/debates/:id/events` — server-sent live update notifications with increasing sequence IDs
 - `POST /api/debates/:id/cancel` — cancel current debate (202), or 409 if it already stopped
+- `GET /api/debates/:id/report` — download recorded M3 decision report as Markdown (409 when absent)
 
 Example:
 
@@ -55,11 +56,23 @@ curl -sS http://127.0.0.1:8787/api/debates \
 
 Poll `GET /api/debates/<returned id>`, or subscribe to the SSE endpoint and refetch the session on each `update` event.
 
+## M3 voting, safety and consensus rules
+
+Turn on **Generate independent consensus votes** (enabled by default in the Vue interface). The `POST /api/debates` API keeps backwards-compatible M2 behavior unless `"consensus":true` is supplied. Set `"quorum":"unanimous"` (default) or `"quorum":"two_thirds"`, and `"blockCritical":true` (default). Each complete debate generates one frozen shared draft, then every selected model independently votes `accept`, `conditional`, or `reject`. Only strict `accept` ballots with empty concerns, valid structured fields, and no contradictions count toward quorum. Missing or malformed votes yield `incomplete`, never consensus. The synthesis facilitator rotates by session and its self-authored acceptance **cannot substitute for sufficient independent non-author acceptance**; the self-authored vote is labeled in the report.
+
+High-severity and unstructured objections from **every debate round** remain open until their original authors confirm resolution in a valid accept ballot or explicitly supersede them with a newer authored objection. A target model's self-reported rebuttal is not proof of resolution. A malformed nonempty critique list becomes an unresolved objection instead of disappearing. With the critical gate disabled, unresolved concerns remain visible and downloadable but do not block the selected voting policy. Outcomes are `unanimous`, `qualified`, `disputed`, `blocked`, `incomplete` or `not_assessed`. All dissent and objection IDs remain visible.
+
+With three models and one round, voting takes **19 calls** total (15 debate + 1 draft + 3 ballots). With three rounds, M2 alone may reach 39 calls, exceeding the 40-call cap once consensus is included. In that case M3 is `not_assessed`. Reduce rounds, choose fewer models, or keep M3 off; the product never silently increases the session's call budget.
+
+Every session keeps separate `debateStatus`, live execution `status` and `consensus.status` fields. The session JSON also retains bounded raw model ballots and facilitator output, SHA-256 hashes of the frozen draft and prompts, and provenance `model:unreported` when the CLI does not expose a trustworthy model label. These are **local plaintext records**, so protect the data folder.
+
+Evidence claims in a generated draft are recorded as **unverified**. The app does not independently browse, validate references or treat multiple-model agreement as factual truth. A final Markdown decision record is created for **every consensus attempt**, including missing votes, invalid drafts, cancellation, and insufficient budget. The report records unresolved critical concerns, gate policy, facilitator self-vote and dissent; downloadable from `GET /api/debates/:id/report` (409 if unavailable).
+
 ## Data and restart behavior
 
 Snapshots are atomically persisted after each stage and each agent response, by default under `.ace-data/debates/<uuid>.json`, which is gitignored. Override storage with `ACE_DATA_DIR=/private/path`. Session files contain the original idea, proposals, structured objections, critiques, rebuttals and revisions **in plain text**; protect this folder if your ideas are confidential.
 
-A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. Cancelling or exceeding a time/call budget terminates active CLI process groups where supported and preserves the partial timeline. **Automatic execution resume and cancellation are M4 work, not M2 features.** In M2 only one session can execute at a time per API process.
+A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. Cancelling or exceeding a time/call budget terminates active CLI process groups where supported and preserves the partial timeline. **Automatic execution resume** remains M4 work; explicit cancellation is already supported. In M2 only one session can execute at a time per API process.
 
 ## Limits and security
 
@@ -67,7 +80,7 @@ A process restart during an unfinished session preserves completed responses but
 - CLI processes run in empty temporary directories with best-effort read-only / plan-mode limitations. User-configured CLI hooks, extensions and tools may still have side effects; **this is not a hardened sandbox**.
 - Provider material is delimited and explicitly labeled untrusted. This mitigates but cannot eliminate prompt injection.
 - Incoming user prompts are limited to 12,000 characters. Outputs stored for each turn are capped at 25,000 characters and peer context is further bounded; trimming is labeled.
-- Execution limits are per CLI invocation and per complete debate; each round may take several minutes. Higher round counts greatly increase total calls and quota consumption.
+- Execution limits are per CLI invocation and per complete debate. Proposal/critique/rebuttal turns have a 150-second cap; revisions receive 180/210/240 seconds for rounds 1/2/3; synthesis and ballots receive 210/180 seconds. Each cap is further reduced by the remaining session deadline. Provider output is bounded at 8 MiB of raw stdout; per-turn stored text remains capped at 25,000 characters. Verbose stderr is drained without exposing CLI diagnostics or treating progress logging as an output-size failure. Higher round counts greatly increase total calls and quota consumption, and default automatic retries are deliberately disabled to avoid hidden model usage.
 - Responses are displayed as sanitized Markdown with DOMPurify. Raw provider stderr is never sent to clients.
 
 ## Development and CI
@@ -84,8 +97,8 @@ Tech stack: Fastify, Vue 3/Vite, TypeScript, Node test runner, local CLI adapter
 ## Roadmap
 
 - **M1:** Three independent providers, parallel proposals and local UI — implemented
-- **M2:** Cross-review, rebuttals, revisions, history and live progress — implemented in this PR
-- **M3:** Explicit voting, evidence, disagreements and qualified consensus reports
+- **M2:** Cross-review, rebuttals, revisions, history and live progress — merged
+- **M3:** Explicit voting, traceable evidence claims, dissent and qualified consensus reports — implemented in this PR
 - **M4:** Production-grade authentication, cancellation/resume, durable worker queue, CLI isolation, API adapters, quotas and benchmarks
 
 The goal is a **traceable, defensible decision**, not artificial agreement.
@@ -99,3 +112,21 @@ ACE_LIVE_SMOKE=I_ACCEPT_MODEL_USAGE npm run smoke:live
 ```
 
 Use this only when your authenticated CLIs have sufficient quota. The smoke persists a local session. No external-provider smoke has yet been run in CI.
+
+## M3 local live smoke (opt-in)
+
+M2 smoke remains `npm run smoke:live` (15 real CLI calls). To explicitly authorize a 19-call M3 flow with your authenticated CLI accounts, run:
+
+```bash
+ACE_LIVE_SMOKE=I_ACCEPT_MODEL_USAGE npm run smoke:consensus
+```
+
+CI uses deterministic stub models and CLI-process integration tests; it cannot verify your personal authenticated CLI accounts. Check session outcome, votes, objections and report after the live smoke.
+
+## M3 correctness regression coverage
+
+CI exercises persistent objections from prior rounds, malformed critique inputs, contradictory accept votes, missing ballot fields, author-confirmed resolutions and supersessions, non-author voting thresholds, disabled critical gate behavior, timeout/cancellation, persistence failure recovery, provenance, audit hashes, and failure reports. Tests use provider mocks; the authenticated live CLI flow must still be verified locally before merge.
+
+## Long-session reliability
+
+Earlier versions used a fixed **90-second** CLI timeout, a **768 KiB** process-stdout cap, and a **32 KiB** stderr cap; long third-round revisions could therefore fail even when providers were functioning. The current version applies phase-aware timeouts, a bounded **8 MiB** raw-response allowance (including provider protocol events), safe stderr draining, explicit response brevity limits, and shorter debate-context excerpts. The overall user-selected duration limit still takes precedence. No failed historical session is rewritten, resumed or silently retried; its timeline remains an auditable partial result. Start a new run with a larger configured total duration if necessary.

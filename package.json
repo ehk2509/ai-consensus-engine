@@ -1,6 +1,6 @@
 {
   "name": "ai-consensus-engine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,7 +14,8 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "vue-tsc --noEmit",
     "build": "vue-tsc --noEmit && vite build --config apps/web/vite.config.ts",
-    "smoke:live": "tsx scripts/live-smoke.ts"
+    "smoke:live": "tsx scripts/live-smoke.ts",
+    "smoke:consensus": "tsx scripts/live-consensus-smoke.ts"
   },
   "dependencies": {
     "fastify": "^5.6.0",
