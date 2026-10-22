@@ -166,7 +166,10 @@ function captureObjections(session: DebateSession, entry: DebateEntry): void {
   const accepted = objects.filter((value): value is Record<string, unknown> =>
     Boolean(value && typeof value === 'object' && typeof value.claim === 'string' && typeof value.criticism === 'string' &&
       value.claim.trim() && value.criticism.trim()));
-  const fallback = accepted.length === 0 ? [{ claim: 'Unstructured peer critique', criticism: entry.content ?? '', severity: 'unspecified' }] : accepted;
+  // An explicit, valid empty objection list is not an unstructured objection.
+  // Only malformed/missing structured output triggers the conservative fallback.
+  const fallback = parsed && Array.isArray(parsed.objections) ? accepted :
+    [{ claim: 'Unstructured peer critique', criticism: entry.content ?? '', severity: 'unspecified' }];
   for (const value of fallback) {
     const severity = ['low', 'medium', 'high'].includes(String(value.severity)) ? value.severity as 'low' | 'medium' | 'high' : 'unspecified';
     session.objections.push({

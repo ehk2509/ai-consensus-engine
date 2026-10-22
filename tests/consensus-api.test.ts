@@ -68,5 +68,10 @@ test('report endpoint refuses non-voted M2 sessions', async () => {
     } });
     const id = (started.json() as { id: string }).id;
     assert.equal((await app.inject({ method: 'GET', url: '/api/debates/' + id + '/report' })).statusCode, 409);
+    for (let i = 0; i < 150; i++) {
+      const snapshot = await app.inject({ method: 'GET', url: '/api/debates/' + id });
+      if (!['queued', 'running'].includes((snapshot.json() as DebateSession).status)) break;
+      await new Promise((done) => setTimeout(done, 15));
+    }
   } finally { await app.close(); await rm(dir, { recursive: true, force: true }); }
 });
