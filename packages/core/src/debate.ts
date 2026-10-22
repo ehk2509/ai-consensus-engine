@@ -183,13 +183,14 @@ function parseObject(text: string): Record<string, unknown> | null {
 }
 function captureObjections(session: DebateSession, entry: DebateEntry, raw: string): void {
   if (entry.phase !== 'critique' || entry.status !== 'fulfilled' || !entry.target) return;
+  const target = entry.target;
   // Parse complete provider output BEFORE shortening its UI/display representation.
   const decoded = decodeCritique(raw);
   const add = (value: Record<string, unknown>, kind: DebateObjection['kind']) => {
     const severity = ['low', 'medium', 'high'].includes(String(value.severity))
       ? value.severity as 'low' | 'medium' | 'high' : 'unspecified';
     session.objections.push({
-      id: randomUUID(), round: entry.round, author: entry.provider, target: entry.target,
+      id: randomUUID(), round: entry.round, author: entry.provider, target,
       sourceEntryId: entry.id, kind, claim: bounded(String(value.claim), 900),
       criticism: bounded(String(value.criticism), 3600), severity,
       evidence: Array.isArray(value.evidence) ? value.evidence.filter((v): v is string => typeof v === 'string')

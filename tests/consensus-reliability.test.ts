@@ -28,7 +28,7 @@ async function run(fn: (id: ProviderId, prompt: string) => string, overrides: Re
 }
 
 test('large valid structured critique is parsed before 25k UI truncation, preserving every objection', async () => {
-  let first: string | null = null;
+  let firstLength = 0;
   const debate = await run((id, prompt) => {
     if (prompt.includes('Stage: CRITIQUE')) {
       const payload = JSON.stringify({ objections: Array.from({ length: 8 }, (_, i) => ({
@@ -36,12 +36,12 @@ test('large valid structured critique is parsed before 25k UI truncation, preser
         criticism: 'Missing evidence for claim ' + i + ' ' + 'y'.repeat(1800),
         severity: 'high', evidence: [],
       })) });
-      first ??= payload;
+      firstLength = Math.max(firstLength, payload.length);
       return payload;
     }
     return response(id, prompt);
   }, { consensus: false });
-  assert.ok((first?.length ?? 0) > 25000);
+  assert.ok(firstLength > 25000);
   assert.equal(debate.objections.length, 48);
   assert.equal(new Set(debate.objections.map(x => x.id)).size, 48);
   assert.ok(debate.objections.every(x => x.kind === 'substantive' && x.sourceEntryId));
