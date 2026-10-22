@@ -130,3 +130,13 @@ CI exercises persistent objections from prior rounds, malformed critique inputs,
 ## Long-session reliability
 
 Earlier versions used a fixed **90-second** CLI timeout, a **768 KiB** process-stdout cap, and a **32 KiB** stderr cap; long third-round revisions could therefore fail even when providers were functioning. The current version applies phase-aware timeouts, a bounded **8 MiB** raw-response allowance (including provider protocol events), safe stderr draining, explicit response brevity limits, and shorter debate-context excerpts. The overall user-selected duration limit still takes precedence. No failed historical session is rewritten, resumed or silently retried; its timeline remains an auditable partial result. Start a new run with a larger configured total duration if necessary.
+
+## M3.1 — Consensus reliability and objection integrity
+
+The critique stage parses **the complete raw provider response before shortening display text**. Structured objections are stored individually with stable IDs and a link to their source entry. For damaged JSON, complete recoverable JSON objects are kept individually, and a separate `parsing_failure` objection records incomplete evidence; unparsable content is **not** treated as a resolved critique. The user-selected provider subprocess still has an 8-MiB raw stdout cap, so truncation by a provider before delivery cannot be repaired automatically.
+
+The synthesis and vote contexts prioritize open high-severity objections using complete bounded JSON records rather than truncating one giant JSON string. Coverage manifests preserve omitted IDs. If important critical context is omitted, M3 returns `incomplete` instead of claiming unanimity.
+
+When initial votes satisfy the policy but substantive critical objections lack author sign-off, M3 may run **one final resolution call per objection author**, subject to remaining call/time budgets. This requires exact IDs and explicit reasons; unparseable-evidence records cannot be cleared by a generic accept vote. Contradictory accept ballots trigger one separately logged clarification call, which may result in a conditional or rejected vote. No unlimited retry loops exist, and all follow-ups are recorded in the session and report.
+
+The `blocked_by_unparseable_evidence` verdict explicitly distinguishes parser/integrity problems from `blocked` decisions caused by actual substantive objections. Existing historical sessions are not rewritten. For a previous blocked session, launch a new run to benefit from the fixes and budget for possible follow-up calls (at most two additional calls per selected agent across clarification and final sign-off).

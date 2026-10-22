@@ -3,8 +3,9 @@ import { validateRequest } from './brainstorm.ts';
 import type { AgentAdapter, BrainstormRequest, ProviderId } from './types.ts';
 import { executeConsensus } from './consensus.ts';
 import type { ConsensusState } from './consensus.ts';
+import { decodeCritique, packObjections } from './objection-utils.ts';
 
-export type DebatePhase = 'proposal' | 'critique' | 'rebuttal' | 'revision' | 'synthesis' | 'vote';
+export type DebatePhase = 'proposal' | 'critique' | 'rebuttal' | 'revision' | 'synthesis' | 'vote' | 'resolution' | 'clarification';
 export type DebateStatus = 'queued' | 'running' | 'completed' | 'partial' | 'insufficient' | 'failed' | 'interrupted' | 'cancelled' | 'budget_exhausted';
 
 export interface DebateRequest extends BrainstormRequest {
@@ -23,6 +24,8 @@ export interface DebateObjection {
   claim: string;
   criticism: string;
   severity: 'low' | 'medium' | 'high' | 'unspecified';
+  kind?: 'substantive' | 'parsing_failure';
+  sourceEntryId?: string;
   evidence: string[];
   suggestedChange?: string;
   resolution: 'unresolved' | 'accepted' | 'partially_accepted' | 'rejected';
@@ -101,7 +104,7 @@ export function createDebateSession(request: DebateRequest): DebateSession {
 
 export type DebatePublisher = (session: DebateSession) => Promise<void>;
 const MAX_STORED_CHARS = 25000;
-const MAX_OBJECTIONS_PER_REVIEW = 8;
+const MAX_OBJECTIONS_PER_REVIEW = 32;
 
 export function recommendedTurnTimeoutMs(phase: DebatePhase, round: number): number {
   if (phase === 'revision') return Math.min(240000, 180000 + Math.max(0, round - 1) * 30000);
@@ -150,22 +153,25 @@ function promptForCritique(session: DebateSession, critic: ProviderId, target: P
     source('proposal_under_review', latestContent(session, target), 8000);
 }
 function promptForRebuttal(session: DebateSession, provider: ProviderId): string {
-  const incoming = extract(session, 'critique', session.round, provider);
   const objections = session.objections.filter((o) => o.round === session.round && o.target === provider);
-  return HEADER + `\nStage: REBUTTAL, round ${session.round}. Respond to objections addressed to ${label(provider, session.request.providers)}.\nReturn a JSON object with {"responses":[{"objectionId":"the exact supplied id","resolution":"accepted|partially_accepted|rejected|unresolved","reason":"your evidence-based reply"}]}. Address EACH supplied objection by its exact ID. Accept valid criticism; reject only with reasons. If you cannot return JSON, explain your responses clearly in Markdown; objections will remain unresolved. Keep JSON compact and limit your response to 900 words.` +
-    source('user_idea', session.request.prompt, 6000) +
-    source('your_current_proposal', latestContent(session, provider), 8000) +
-    source('objections_with_stable_ids', JSON.stringify(objections), 9500) +
-    incoming.map((entry, i) => source(`critic_${i + 1}_feedback`, entry.content ?? '', 3000)).join('');
+  const packed = packObjections(objections, 11500);
+  return HEADER + '\nStage: REBUTTAL, round ' + session.round +
+    '. Reply to supplied objection IDs. Return JSON {"responses":[{"objectionId":"exact id","resolution":"accepted|partially_accepted|rejected|unresolved","reason":"explanation"}]}. Do not invent IDs. Any objection omitted for context remains open; do not claim all have been addressed.' +
+    source('user_idea', session.request.prompt, 5000) +
+    source('your_current_proposal', latestContent(session, provider), 7500) +
+    source('objections_with_stable_ids', packed.text, 12000) +
+    '\nObjections omitted due to bounded context: ' + packed.omittedIds.length + '.\n';
 }
 function promptForRevision(session: DebateSession, provider: ProviderId): string {
-  const critiques = extract(session, 'critique', session.round, provider);
   const rebuttal = session.entries.findLast((e) => e.phase === 'rebuttal' && e.round === session.round && e.provider === provider && e.status === 'fulfilled');
-  return HEADER + `\nStage: REVISE, round ${session.round}. Produce a full, standalone UPDATED proposal, not just a change log. Integrate justified improvements from criticism; explain any important disagreements remaining. Do not claim the council reached consensus. Keep the full updated proposal below 1,800 words; do not repeat previous drafts verbatim.` +
-    source('user_idea', session.request.prompt, 6000) +
+  const packed = packObjections(session.objections.filter((o) => o.round === session.round && o.target === provider), 11000);
+  return HEADER + '\nStage: REVISE, round ' + session.round +
+    '. Produce a complete standalone UPDATED proposal (under 1,800 words). Address the listed objections; never assume an omitted objection was resolved. Do not claim consensus.' +
+    source('user_idea', session.request.prompt, 5000) +
     source('previous_proposal', latestContent(session, provider), 7500) +
-    critiques.map((entry, i) => source(`peer_${i + 1}_critique`, entry.content ?? '', 3500)).join('') +
-    (rebuttal ? source('your_rebuttal', rebuttal.content ?? '', 4500) : '');
+    source('peer_critiques', packed.text, 11500) +
+    '\nObjections omitted due to bounded context: ' + packed.omittedIds.length + '.\n' +
+    (rebuttal ? source('your_rebuttal', rebuttal.content ?? '', 4200) : '');
 }
 
 function parseObject(text: string): Record<string, unknown> | null {
@@ -175,37 +181,36 @@ function parseObject(text: string): Record<string, unknown> | null {
     return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj as Record<string, unknown> : null;
   } catch { return null; }
 }
-function captureObjections(session: DebateSession, entry: DebateEntry): void {
+function captureObjections(session: DebateSession, entry: DebateEntry, raw: string): void {
   if (entry.phase !== 'critique' || entry.status !== 'fulfilled' || !entry.target) return;
-  const parsed = parseObject(entry.content ?? '');
-  const objects = parsed && Array.isArray(parsed.objections) ? parsed.objections.slice(0, MAX_OBJECTIONS_PER_REVIEW) : [];
-  const accepted = objects.filter((value): value is Record<string, unknown> =>
-    Boolean(value && typeof value === 'object' && typeof value.claim === 'string' && typeof value.criticism === 'string' &&
-      value.claim.trim() && value.criticism.trim()));
-  // Explicitly valid empty list means no objections, but malformed nonempty arrays
-  // must be tracked rather than silently disappearing and allowing false consensus.
-  const invalidCount = objects.length - accepted.length;
-  const fallback = parsed && Array.isArray(parsed.objections)
-    ? [...accepted, ...(invalidCount > 0 ? [{
-      claim: 'Malformed structured objections',
-      criticism: `${invalidCount} incomplete objections were returned: ${bounded(JSON.stringify(objects), 4000)}`,
-      severity: 'unspecified',
-    }] : [])]
-    : [{ claim: 'Unstructured peer critique', criticism: entry.content ?? '', severity: 'unspecified' }];
-  for (const value of fallback) {
-    const severity = ['low', 'medium', 'high'].includes(String(value.severity)) ? value.severity as 'low' | 'medium' | 'high' : 'unspecified';
+  // Parse complete provider output BEFORE shortening its UI/display representation.
+  const decoded = decodeCritique(raw);
+  const add = (value: Record<string, unknown>, kind: DebateObjection['kind']) => {
+    const severity = ['low', 'medium', 'high'].includes(String(value.severity))
+      ? value.severity as 'low' | 'medium' | 'high' : 'unspecified';
     session.objections.push({
       id: randomUUID(), round: entry.round, author: entry.provider, target: entry.target,
-      claim: bounded(String(value.claim), 1000), criticism: bounded(String(value.criticism), 4500),
-      severity, evidence: Array.isArray(value.evidence) ? value.evidence.filter((v): v is string => typeof v === 'string').slice(0, 5).map((v) => bounded(v, 700)) : [],
-      suggestedChange: typeof value.suggestedChange === 'string' ? bounded(value.suggestedChange, 1200) : undefined,
+      sourceEntryId: entry.id, kind, claim: bounded(String(value.claim), 900),
+      criticism: bounded(String(value.criticism), 3600), severity,
+      evidence: Array.isArray(value.evidence) ? value.evidence.filter((v): v is string => typeof v === 'string')
+        .slice(0, 5).map((v) => bounded(v, 700)) : [],
+      suggestedChange: typeof value.suggestedChange === 'string' ? bounded(value.suggestedChange, 1000) : undefined,
       resolution: 'unresolved', authorStatus: 'open',
     });
-  }
+  };
+  for (const value of decoded.records.slice(0, MAX_OBJECTIONS_PER_REVIEW)) add(value, 'substantive');
+  // Fail closed: partial/unparseable evidence has a SEPARATE sentinel, never
+  // replace recovered individual objections with a giant generic JSON string.
+  for (const error of decoded.errors) add({
+    claim: decoded.unparseable ? 'Unparseable critique evidence' : 'Malformed critique evidence',
+    criticism: error + ' Original source entry: ' + entry.id + '. Recheck the original critique before accepting. Excerpt: ' + bounded(raw, 650),
+    severity: 'unspecified',
+  }, 'parsing_failure');
 }
-function applyRebuttal(session: DebateSession, entry: DebateEntry): void {
+
+function applyRebuttal(session: DebateSession, entry: DebateEntry, raw: string): void {
   if (entry.phase !== 'rebuttal' || entry.status !== 'fulfilled') return;
-  const parsed = parseObject(entry.content ?? '');
+  const parsed = parseObject(raw);
   if (!parsed || !Array.isArray(parsed.responses)) return;
   const allowed = new Set(['accepted', 'partially_accepted', 'rejected', 'unresolved']);
   for (const value of parsed.responses.slice(0, 24)) {
@@ -253,13 +258,13 @@ async function perform(
     if (!raw.trim()) throw new Error('Empty response.');
     entry = { id: randomUUID(), phase, round, provider, target, status: 'fulfilled',
       content: bounded(raw, MAX_STORED_CHARS), durationMs: Math.round(performance.now() - start), timeoutMs, createdAt: new Date().toISOString() };
+    captureObjections(session, entry, raw);
+    applyRebuttal(session, entry, raw);
   } catch (error) {
     entry = { id: randomUUID(), phase, round, provider, target, status: 'rejected',
       error: signal?.aborted ? 'Execution cancelled or time limit reached.' : safeError(error), durationMs: Math.round(performance.now() - start), timeoutMs, createdAt: new Date().toISOString() };
   }
   session.entries.push(entry);
-  captureObjections(session, entry);
-  applyRebuttal(session, entry);
   await notify(session, publisher, { type: 'entry', phase, round, entryId: entry.id });
 }
 
