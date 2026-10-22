@@ -311,7 +311,7 @@ export async function executeDebate(
     const debateOutcome = session.status;
     try {
       await executeConsensus(session, adapters, publisher, signal);
-      if (session.status === 'running') session.status = debateOutcome;
+      session.status = debateOutcome;
     }
     catch (error) {
       session.error = 'Consensus stage could not complete; earlier debate records remain available.';

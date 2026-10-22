@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDebateSession, executeDebate, validateDebateRequest } from '../packages/core/src/debate.ts';
 import type { AgentAdapter, ProviderId } from '../packages/core/src/types.ts';
-import type { DebateSession } from '../packages/core/src/debate.ts';
 
 const ids: ProviderId[] = ['codex', 'claude', 'gemini'];
 const idea = 'Evaluate an autonomous AI startup studio with a repeatable revenue model';
@@ -74,7 +73,7 @@ test('critical objections block a unanimous vote unless their authors explicitly
   const blocked = (await evaluate({}, { objection: true })).session;
   assert.equal(blocked.consensus?.status, 'blocked');
   assert.equal(blocked.consensus?.blockingObjectionIds.length, 6);
-  const signed = (await evaluate({}, { objection: true, vote: (id, prompt) => ({
+  const signed = (await evaluate({}, { objection: true, vote: (_id, prompt) => ({
     verdict: 'accept', rationale: 'The draft now resolves my issues', concerns: [],
     resolvedObjectionIds: [...prompt.matchAll(/"id":"([0-9a-f-]{36})"/g)].map(m => m[1]),
   }) })).session;

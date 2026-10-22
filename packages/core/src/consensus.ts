@@ -1,5 +1,5 @@
 import type { AgentAdapter, ProviderId } from './types.ts';
-import type { DebateSession, DebateObjection, DebatePublisher } from './debate.ts';
+import type { DebateSession, DebatePublisher } from './debate.ts';
 
 export type ConsensusVerdict = 'accept' | 'conditional' | 'reject';
 export type ConsensusStatus = 'pending' | 'drafting' | 'voting' | 'unanimous' | 'qualified' | 'disputed' | 'blocked' | 'incomplete' | 'not_assessed';
