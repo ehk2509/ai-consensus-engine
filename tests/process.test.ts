@@ -55,3 +55,14 @@ test('kills descendant processes when a CLI times out (POSIX)', { skip: process.
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('abort signal stops a subprocess before its timeout', async () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 80);
+  try {
+    await assert.rejects(runAgentProcess({
+      executable: node, args: ['-e', 'setInterval(()=>{},1000)'],
+      stdin: '', timeoutMs: 2500, signal: controller.signal,
+    }), (error: unknown) => error instanceof AgentExecutionError && /cancelled/.test(error.message));
+  } finally { clearTimeout(timer); }
+});

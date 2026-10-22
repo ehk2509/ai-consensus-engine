@@ -11,7 +11,7 @@ Local-first, multi-provider brainstorming and structured AI deliberation powered
 Requires Node.js **22.12+** and at least two authenticated CLI providers. Authenticate your local `codex`, `claude` and `agy` executables independently. Gemini uses the locally authenticated Antigravity CLI instead of the standard Gemini CLI.
 
 ```bash
-npm install
+npm ci
 npm run dev
 # Open http://127.0.0.1:5173
 ```
@@ -89,3 +89,13 @@ Tech stack: Fastify, Vue 3/Vite, TypeScript, Node test runner, local CLI adapter
 - **M4:** Production-grade authentication, cancellation/resume, durable worker queue, CLI isolation, API adapters, quotas and benchmarks
 
 The goal is a **traceable, defensible decision**, not artificial agreement.
+
+## Provider integration validation
+
+CI uses executable mock CLIs to validate real subprocess invocation, stdin framing, protocol parsing and all 15 three-model debate stages. The real accounts can only be exercised on your authenticated workstation. To explicitly authorize that final smoke (up to 15 provider calls), run:
+
+```bash
+ACE_LIVE_SMOKE=I_ACCEPT_MODEL_USAGE npm run smoke:live
+```
+
+Use this only when your authenticated CLIs have sufficient quota. The smoke persists a local session. No external-provider smoke has yet been run in CI.
