@@ -516,7 +516,7 @@ export async function executeConsensus(
       await clarifyContradictions(session, state, adapters, publish, signal, deadlineMs);
       state.contextOmittedCriticalIds = omittedCriticalForVotes(session);
       determine(session, state);
-      const currentVerdict: ConsensusStatus = state.status;
+      const currentVerdict = state.status as ConsensusStatus;
       if (currentVerdict === 'blocked') {
         await resolveOpenObjections(session, state, adapters, publish, signal, deadlineMs);
         determine(session, state);
