@@ -1,6 +1,6 @@
 {
   "name": "ai-consensus-engine",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,11 +13,14 @@
     "start:api": "tsx apps/api/src/index.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "vue-tsc --noEmit",
-    "build": "vue-tsc --noEmit && vite build --config apps/web/vite.config.ts"
+    "build": "vue-tsc --noEmit && vite build --config apps/web/vite.config.ts",
+    "smoke:live": "tsx scripts/live-smoke.ts"
   },
   "dependencies": {
     "fastify": "^5.6.0",
-    "vue": "^3.5.0"
+    "vue": "^3.5.0",
+    "marked": "^15.0.0",
+    "dompurify": "^3.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

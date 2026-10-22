@@ -3,7 +3,7 @@ export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export interface AgentAdapter {
   id: ProviderId;
-  propose(prompt: string): Promise<string>;
+  propose(prompt: string, signal?: AbortSignal): Promise<string>;
 }
 
 export type ProposalResult =

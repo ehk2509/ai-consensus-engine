@@ -14,6 +14,7 @@ export interface ProcessSpec {
   args: string[];
   stdin: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }
 
 function terminateTree(pid: number | undefined, fallback: () => void): void {
@@ -47,6 +48,7 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
       let size = 0;
       let errorSize = 0;
       let timedOut = false;
+      let aborted = false;
       let exceeded = false;
       let spawnError: NodeJS.ErrnoException | undefined;
       let terminated = false;
@@ -55,6 +57,9 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
         terminated = true;
         terminateTree(child.pid, () => { try { child.kill('SIGKILL'); } catch { /* already exited */ } });
       };
+      const onAbort = () => { aborted = true; terminate(); };
+      spec.signal?.addEventListener('abort', onAbort, { once: true });
+      if (spec.signal?.aborted) onAbort();
       const timer = setTimeout(() => { timedOut = true; terminate(); }, spec.timeoutMs);
       child.stdout.on('data', (chunk: Buffer) => {
         size += chunk.length;
@@ -68,6 +73,8 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
       child.on('error', (error: NodeJS.ErrnoException) => { spawnError = error; });
       child.on('close', (code) => {
         clearTimeout(timer);
+        spec.signal?.removeEventListener('abort', onAbort);
+        if (aborted) return reject(new AgentExecutionError('Provider cancelled.'));
         if (spawnError?.code === 'ENOENT') return reject(new AgentExecutionError(`${spec.executable} CLI is not installed or not on PATH.`));
         if (spawnError) return reject(new AgentExecutionError('Unable to launch provider CLI.'));
         if (timedOut) return reject(new AgentExecutionError('Provider timed out.'));

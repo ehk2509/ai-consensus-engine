@@ -58,9 +58,9 @@ export function createAdapters(timeoutMs = 90000): Map<string, AgentAdapter> {
   };
   return new Map(Object.entries(specifications).map(([id, { encodeStdin, ...spec }]) => [id, {
     id: id as ProviderId,
-    async propose(prompt: string): Promise<string> {
+    async propose(prompt: string, signal?: AbortSignal): Promise<string> {
       const text = prompt;
-      const raw = await runAgentProcess({ ...spec, stdin: encodeStdin ? encodeStdin(text) : text, timeoutMs });
+      const raw = await runAgentProcess({ ...spec, stdin: encodeStdin ? encodeStdin(text) : text, timeoutMs, signal });
       return extractResponse(id as ProviderId, raw);
     },
   }]));
