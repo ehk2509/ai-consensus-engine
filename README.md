@@ -30,7 +30,7 @@ Each targeted critique requests structured JSON objections, with stable IDs and 
 
 Critiques for one provider are deliberately serialized to avoid launching multiple concurrent sessions under that same CLI account; different providers can work in parallel. When a provider fails, the session keeps successful results and does not invent missing replies. If fewer than two initial proposals succeed, no debate is attempted. **Unanimity is neither calculated nor asserted in M2.**
 
-**Usage:** with three providers, a single round makes up to 15 model calls (3 proposals, 6 targeted critiques, 3 rebuttals, 3 revisions). Two rounds can make up to 27 calls. Each call can consume account quota or incur costs depending on your CLI and provider terms. A debate defaults to a **40-call** and **15-minute** total budget, configurable up to 40 calls and 30 minutes; budget exhaustion is reported distinctly. Cancel an active session using the UI or API.
+**Usage:** with three providers, a single round makes up to 15 model calls (3 proposals, 6 targeted critiques, 3 rebuttals, 3 revisions). Two rounds can make up to 27 calls. Each call can consume account quota or incur costs depending on your CLI and provider terms. A debate defaults to a **40-call** and **15-minute** total budget, configurable up to 40 calls and 30 minutes; selecting two or three rounds in the UI adjusts the suggested time budget to 20 or 30 minutes. Budget exhaustion is reported distinctly. Cancel an active session using the UI or API.
 
 ## API
 
@@ -80,7 +80,7 @@ A process restart during an unfinished session preserves completed responses but
 - CLI processes run in empty temporary directories with best-effort read-only / plan-mode limitations. User-configured CLI hooks, extensions and tools may still have side effects; **this is not a hardened sandbox**.
 - Provider material is delimited and explicitly labeled untrusted. This mitigates but cannot eliminate prompt injection.
 - Incoming user prompts are limited to 12,000 characters. Outputs stored for each turn are capped at 25,000 characters and peer context is further bounded; trimming is labeled.
-- Execution limits are per CLI invocation and per complete debate; each round may take several minutes. Higher round counts greatly increase total calls and quota consumption.
+- Execution limits are per CLI invocation and per complete debate. Proposal/critique/rebuttal turns have a 150-second cap; revisions receive 180/210/240 seconds for rounds 1/2/3; synthesis and ballots receive 210/180 seconds. Each cap is further reduced by the remaining session deadline. Provider output is bounded at 8 MiB of raw stdout; per-turn stored text remains capped at 25,000 characters. Verbose stderr is drained without exposing CLI diagnostics or treating progress logging as an output-size failure. Higher round counts greatly increase total calls and quota consumption, and default automatic retries are deliberately disabled to avoid hidden model usage.
 - Responses are displayed as sanitized Markdown with DOMPurify. Raw provider stderr is never sent to clients.
 
 ## Development and CI
@@ -126,3 +126,7 @@ CI uses deterministic stub models and CLI-process integration tests; it cannot v
 ## M3 correctness regression coverage
 
 CI exercises persistent objections from prior rounds, malformed critique inputs, contradictory accept votes, missing ballot fields, author-confirmed resolutions and supersessions, non-author voting thresholds, disabled critical gate behavior, timeout/cancellation, persistence failure recovery, provenance, audit hashes, and failure reports. Tests use provider mocks; the authenticated live CLI flow must still be verified locally before merge.
+
+## Long-session reliability
+
+Earlier versions used a fixed **90-second** CLI timeout, a **768 KiB** process-stdout cap, and a **32 KiB** stderr cap; long third-round revisions could therefore fail even when providers were functioning. The current version applies phase-aware timeouts, a bounded **8 MiB** raw-response allowance (including provider protocol events), safe stderr draining, explicit response brevity limits, and shorter debate-context excerpts. The overall user-selected duration limit still takes precedence. No failed historical session is rewritten, resumed or silently retried; its timeline remains an auditable partial result. Start a new run with a larger configured total duration if necessary.

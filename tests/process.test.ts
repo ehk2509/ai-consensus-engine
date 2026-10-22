@@ -20,7 +20,7 @@ test('terminates commands that exceed timeout', async () => {
 });
 
 test('rejects excessive output instead of collecting unbounded data', async () => {
-  await assert.rejects(runAgentProcess({ executable: node, args: ['-e', 'process.stdout.write("x".repeat(900000))'], stdin: '', timeoutMs: 3000 }), (error: unknown) => error instanceof AgentExecutionError && /safety limit/.test(error.message));
+  await assert.rejects(runAgentProcess({ executable: node, args: ['-e', 'process.stdout.write("x".repeat(9*1024*1024))'], stdin: '', timeoutMs: 3000 }), (error: unknown) => error instanceof AgentExecutionError && /safety limit/.test(error.message));
 });
 
 test('parses provider output without accepting CLI error objects', () => {
@@ -65,4 +65,25 @@ test('abort signal stops a subprocess before its timeout', async () => {
       stdin: '', timeoutMs: 2500, signal: controller.signal,
     }), (error: unknown) => error instanceof AgentExecutionError && /cancelled/.test(error.message));
   } finally { clearTimeout(timer); }
+});
+
+test('accepts normal long CLI output that exceeded the former 768 KiB limit', async () => {
+  const response = await runAgentProcess({
+    executable: node, args: ['-e', 'process.stdout.write("a".repeat(1024*1024))'],
+    stdin: '', timeoutMs: 5000,
+  });
+  assert.equal(response.length, 1024*1024);
+});
+
+test('verbose stderr progress never kills an otherwise valid response', async () => {
+  const response = await runAgentProcess({
+    executable: node, args: ['-e', 'process.stderr.write("s".repeat(160*1024)); process.stdout.write("done")'],
+    stdin: '', timeoutMs: 5000,
+  });
+  assert.equal(response, 'done');
+});
+
+test('nonpositive process timeouts are rejected before spawning a process', async () => {
+  await assert.rejects(runAgentProcess({ executable: node, args: [], stdin: '', timeoutMs: 0 }),
+    (error: unknown) => error instanceof AgentExecutionError && /Invalid provider timeout/.test(error.message));
 });

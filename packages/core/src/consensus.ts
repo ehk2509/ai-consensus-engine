@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AgentAdapter, ProviderId } from './types.ts';
 import type { DebateObjection, DebateSession, DebatePublisher } from './debate.ts';
+import { recommendedTurnTimeoutMs } from './debate.ts';
 
 export type ConsensusVerdict = 'accept' | 'conditional' | 'reject';
 export type ConsensusStatus = 'pending' | 'drafting' | 'voting' | 'unanimous' | 'qualified' | 'disputed' | 'blocked' | 'incomplete' | 'not_assessed';
@@ -271,7 +272,7 @@ function parseVote(raw: string, provider: ProviderId, session: DebateSession, dr
 }
 export async function executeConsensus(
   session: DebateSession, adapters: ReadonlyMap<string, AgentAdapter>,
-  publish: DebatePublisher, signal: AbortSignal,
+  publish: DebatePublisher, signal: AbortSignal, deadlineMs?: number,
 ): Promise<void> {
   const policy = { quorum: session.request.quorum ?? 'unanimous', blockCritical: session.request.blockCritical ?? true };
   const state: ConsensusState = {
@@ -309,7 +310,9 @@ export async function executeConsensus(
     session.calls++;
     let rawDraft: string;
     try {
-      const reply = await adapters.get(facilitator)?.propose(draftPrompt, signal);
+      const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs('synthesis', session.request.maxRounds),
+        deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
+      const reply = await adapters.get(facilitator)?.propose(draftPrompt, signal, { timeoutMs });
       if (!reply || signal.aborted) throw new Error('Draft unavailable');
       rawDraft = reply;
     } catch (error) {
@@ -357,7 +360,9 @@ export async function executeConsensus(
       try {
         const adapter = adapters.get(provider);
         if (!adapter) throw new Error('No provider adapter');
-        const raw = await adapter.propose(prompt, signal);
+        const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs('vote', session.request.maxRounds),
+          deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
+        const raw = await adapter.propose(prompt, signal, { timeoutMs });
         rawResponse = raw;
         if (signal.aborted) throw new Error('Cancelled');
         vote = parseVote(raw, provider, session, draft, prompt, Math.round(performance.now() - start));

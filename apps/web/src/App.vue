@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { BrainstormResult, ProviderId } from '../../../packages/core/src/types.ts';
@@ -17,6 +17,11 @@ const prompt = ref('');
 const maxRounds = ref(1);
 const maxCalls = ref(40);
 const maxDurationMinutes = ref(15);
+watch(maxRounds, (rounds) => {
+  // Later rounds require larger end-to-end budgets, but never increase provider calls.
+  if (rounds === 3 && maxDurationMinutes.value < 30) maxDurationMinutes.value = 30;
+  if (rounds === 2 && maxDurationMinutes.value < 20) maxDurationMinutes.value = 20;
+});
 const consensusEnabled = ref(true);
 const quorum = ref<'unanimous' | 'two_thirds'>('unanimous');
 const blockCritical = ref(true);
@@ -209,7 +214,7 @@ onBeforeUnmount(closeStream);
           </div>
           <div v-if="mode === 'debate'" class="round-config">
           <div><strong>Execution budget</strong><p class="muted">Never exceed this many model calls or minutes. Default one-round three-agent debate needs up to 15 calls.</p></div>
-          <div class="budget-controls"><label>Max calls <select v-model.number="maxCalls" :disabled="pending"><option v-for="n in [8, 15, 27, 39, 40]" :key="n" :value="n">{{ n }}</option></select></label><label>Minutes <select v-model.number="maxDurationMinutes" :disabled="pending"><option v-for="n in [3, 5, 10, 15, 30]" :key="n" :value="n">{{ n }}</option></select></label></div>
+          <div class="budget-controls"><label>Max calls <select v-model.number="maxCalls" :disabled="pending"><option v-for="n in [8, 15, 27, 39, 40]" :key="n" :value="n">{{ n }}</option></select></label><label>Minutes <select v-model.number="maxDurationMinutes" :disabled="pending"><option v-for="n in [3, 5, 10, 15, 20, 30]" :key="n" :value="n">{{ n }}</option></select></label></div>
         </div>
         <div v-if="mode === 'debate'" class="consensus-config">
           <label class="consensus-toggle"><input v-model="consensusEnabled" type="checkbox" :disabled="pending" /> Generate independent consensus votes and final report</label>
@@ -219,7 +224,7 @@ onBeforeUnmount(closeStream);
             </label>
             <label class="consensus-toggle"><input v-model="blockCritical" type="checkbox" :disabled="pending" /> Block unresolved critical objections</label>
           </div>
-          <p class="muted">Approximate maximum: {{ estimatedCalls }} model calls for selected providers and rounds. Voting never implies facts have been verified.</p>
+          <p class="muted">Approximate maximum: {{ estimatedCalls }} model calls. Later revision rounds can take up to 4 minutes per provider call (within the overall time cap). A 3-round run may need 30 minutes. Voting never implies facts have been verified.</p>
           <p v-if="estimatedCalls > maxCalls" class="warning" role="status">The configured {{ maxCalls }}-call budget may prevent consensus voting. Reduce rounds or turn off voting.</p>
         </div>
         <div class="row footer-row"><span class="muted">Local accounts · Traceable objections, independent votes, no forced agreement.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
@@ -255,7 +260,7 @@ onBeforeUnmount(closeStream);
               <div v-if="entry.status === 'fulfilled'" class="markdown response" v-html="markdown(entry.content ?? '')" />
               <p v-else class="warning">{{ entry.error }}</p>
             </details>
-            <small class="muted">{{ duration(entry.durationMs) }} · {{ formatTime(entry.createdAt) }}</small>
+            <small class="muted">{{ duration(entry.durationMs) }} · {{ formatTime(entry.createdAt) }}<span v-if="entry.timeoutMs"> · per-call limit {{ duration(entry.timeoutMs) }}</span></small>
           </article>
           <section v-if="(debate.objections ?? []).length" class="objections-panel panel">
             <div class="section-top"><h2>Tracked objections</h2><span>{{ debate.objections.length }} records</span></div>
