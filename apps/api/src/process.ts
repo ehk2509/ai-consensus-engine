@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 const MAX_OUTPUT_BYTES = 768 * 1024;
 const MAX_ERROR_BYTES = 32 * 1024;
+
 export class AgentExecutionError extends Error {
   constructor(message: string) { super(message); this.name = 'AgentExecutionError'; }
 }
@@ -13,36 +14,67 @@ export interface ProcessSpec {
   args: string[];
   stdin: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }
 
-/** No shell, no user prompt in CLI args, empty temporary working directory. */
+function terminateTree(pid: number | undefined, fallback: () => void): void {
+  if (!pid) { fallback(); return; }
+  if (process.platform === 'win32') {
+    // Windows process tree termination; do not invoke a shell.
+    const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    killer.on('error', fallback);
+    return;
+  }
+  try {
+    // With detached=true below, the child is the process-group leader.
+    // Terminate children, grandchildren and the leader together.
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    fallback();
+  }
+}
+
+/** Shell-free, bounded and best-effort process-tree-isolated CLI invocation. */
 export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), 'ace-agent-'));
   try {
     return await new Promise<string>((resolve, reject) => {
       const child = spawn(spec.executable, spec.args, {
-        cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+        cwd, shell: false, detached: process.platform !== 'win32',
+        windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, CI: 'true', NO_COLOR: '1' },
       });
       const stdout: Buffer[] = [];
       let size = 0;
       let errorSize = 0;
       let timedOut = false;
+      let aborted = false;
       let exceeded = false;
       let spawnError: NodeJS.ErrnoException | undefined;
-      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, spec.timeoutMs);
+      let terminated = false;
+      const terminate = () => {
+        if (terminated) return;
+        terminated = true;
+        terminateTree(child.pid, () => { try { child.kill('SIGKILL'); } catch { /* already exited */ } });
+      };
+      const onAbort = () => { aborted = true; terminate(); };
+      spec.signal?.addEventListener('abort', onAbort, { once: true });
+      if (spec.signal?.aborted) onAbort();
+      const timer = setTimeout(() => { timedOut = true; terminate(); }, spec.timeoutMs);
       child.stdout.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_OUTPUT_BYTES) { exceeded = true; child.kill('SIGKILL'); }
+        if (size > MAX_OUTPUT_BYTES) { exceeded = true; terminate(); }
         else stdout.push(chunk);
       });
       child.stderr.on('data', (chunk: Buffer) => {
         errorSize += chunk.length;
-        if (errorSize > MAX_ERROR_BYTES) { exceeded = true; child.kill('SIGKILL'); }
+        if (errorSize > MAX_ERROR_BYTES) { exceeded = true; terminate(); }
       });
       child.on('error', (error: NodeJS.ErrnoException) => { spawnError = error; });
       child.on('close', (code) => {
         clearTimeout(timer);
+        spec.signal?.removeEventListener('abort', onAbort);
+        if (aborted) return reject(new AgentExecutionError('Provider cancelled.'));
         if (spawnError?.code === 'ENOENT') return reject(new AgentExecutionError(`${spec.executable} CLI is not installed or not on PATH.`));
         if (spawnError) return reject(new AgentExecutionError('Unable to launch provider CLI.'));
         if (timedOut) return reject(new AgentExecutionError('Provider timed out.'));

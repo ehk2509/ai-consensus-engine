@@ -107,3 +107,55 @@ test('peer material is delimited and trimmed before being reintroduced as contex
   assert.equal(examined, 2);
   assert.ok(session.entries.every((e) => !e.content || e.content.length <= 25100));
 });
+
+test('records structured objections and maps rebuttal responses to exact objection IDs', async () => {
+  const session = createDebateSession({ ...ideas, providers: ['codex', 'claude'] });
+  await executeDebate(session, adaptersWith((_id, prompt) => {
+    if (prompt.includes('Stage: CRITIQUE')) {
+      return JSON.stringify({ objections: [{ claim: 'Assumes zero marginal cost', criticism: 'Compute costs are not free', severity: 'high', evidence: ['API metering'], suggestedChange: 'Run cost experiments' }] });
+    }
+    if (prompt.includes('Stage: REBUTTAL')) {
+      const ids = [...prompt.matchAll(/"id":"([0-9a-f-]{36})"/g)].map((match) => match[1]);
+      return JSON.stringify({ responses: ids.map((objectionId) => ({ objectionId, resolution: 'accepted', reason: 'Budget the compute costs.' })) });
+    }
+    return 'A plausible proposal';
+  }), async () => {});
+  assert.equal(session.objections.length, 2);
+  assert.equal(new Set(session.objections.map((o) => o.id)).size, 2);
+  assert.ok(session.objections.every((o) => o.severity === 'high' && o.resolution === 'accepted'));
+  assert.ok(session.objections.every((o) => o.response?.includes('Budget the compute')));
+});
+
+test('preserves unstructured objections as unresolved rather than assuming an agreement', async () => {
+  const session = createDebateSession({ ...ideas, providers: ['codex', 'claude'] });
+  await executeDebate(session, adaptersWith((_id, prompt) => prompt.includes('Stage: CRITIQUE') ? 'This is not structured JSON' : 'Plaintext reply'), async () => {});
+  assert.equal(session.objections.length, 2);
+  assert.ok(session.objections.every((o) => o.severity === 'unspecified' && o.resolution === 'unresolved'));
+});
+
+test('caps total provider calls and reports budget exhaustion', async () => {
+  const session = createDebateSession({ ...ideas, providers: ['codex', 'claude'], maxRounds: 3, maxCalls: 3 });
+  let invoked = 0;
+  await executeDebate(session, adaptersWith(() => { invoked++; return 'A valid proposal'; }), async () => {});
+  assert.equal(invoked, 3);
+  assert.equal(session.calls, 3);
+  assert.equal(session.status, 'budget_exhausted');
+  assert.ok(session.entries.some((entry) => entry.status === 'skipped'));
+});
+
+test('stops debates when cancelled without falsely claiming completion', async () => {
+  const controller = new AbortController();
+  const session = createDebateSession({ ...ideas, providers: ['codex', 'claude'] });
+  await executeDebate(session, adaptersWith(async () => {
+    controller.abort();
+    return 'A response';
+  }), async () => {}, controller.signal);
+  assert.equal(session.status, 'cancelled');
+  assert.ok(session.calls <= 2);
+});
+
+test('rejects invalid total call and time budgets', () => {
+  for (const values of [{ maxCalls: 41 }, { maxCalls: 1 }, { maxDurationMs: 9000 }, { maxDurationMs: 1900000 }]) {
+    assert.throws(() => validateDebateRequest({ ...ideas, ...values }));
+  }
+});

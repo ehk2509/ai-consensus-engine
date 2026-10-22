@@ -15,6 +15,8 @@ const selected = ref<ProviderId[]>([...options]);
 const mode = ref<Mode>('debate');
 const prompt = ref('');
 const maxRounds = ref(1);
+const maxCalls = ref(40);
+const maxDurationMinutes = ref(15);
 const pending = ref(false);
 const result = ref<BrainstormResult | null>(null);
 const debate = ref<DebateSession | null>(null);
@@ -108,6 +110,14 @@ async function openHistory(id: string) {
     subscribe(id);
   }
 }
+async function cancelDebate() {
+  if (!debate.value || !pending.value) return;
+  try {
+    const response = await fetch('/api/debates/' + encodeURIComponent(debate.value.id) + '/cancel', { method: 'POST' });
+    if (!response.ok) throw new Error('Unable to request cancellation.');
+    connection.value = 'Cancellation requested. Stopping active CLI processes…';
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : 'Unable to cancel debate.'; }
+}
 async function submit() {
   if (pending.value || !valid.value) return;
   requestGeneration += 1;
@@ -125,7 +135,7 @@ async function submit() {
     const isDebate = mode.value === 'debate';
     const response = await fetch(isDebate ? '/api/debates' : '/api/brainstorms', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value } : {}) }),
+      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000 } : {}) }),
     });
     const body: unknown = await response.json();
     if (!response.ok) {
@@ -193,16 +203,21 @@ onBeforeUnmount(closeStream);
               <option :value="1">1 round</option><option :value="2">2 rounds</option><option :value="3">3 rounds</option>
             </select>
           </div>
-          <div class="row footer-row"><span class="muted">Uses your local CLI logins. No voting or forced agreement in M2.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
+          <div v-if="mode === 'debate'" class="round-config">
+          <div><strong>Execution budget</strong><p class="muted">Never exceed this many model calls or minutes. Default one-round three-agent debate needs up to 15 calls.</p></div>
+          <div class="budget-controls"><label>Max calls <select v-model.number="maxCalls" :disabled="pending"><option v-for="n in [8, 15, 27, 39, 40]" :key="n" :value="n">{{ n }}</option></select></label><label>Minutes <select v-model.number="maxDurationMinutes" :disabled="pending"><option v-for="n in [3, 5, 10, 15, 30]" :key="n" :value="n">{{ n }}</option></select></label></div>
+        </div>
+        <div class="row footer-row"><span class="muted">Uses your local CLI logins. No voting or forced agreement in M2.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
           <p v-if="error" class="error" role="alert">{{ error }}</p>
           <p v-if="connection" class="warning" role="status">{{ connection }}</p>
+          <button v-if="pending && debate" class="cancel-action" type="button" @click="cancelDebate">Cancel current debate</button>
         </section>
         <section v-if="debate" class="results" aria-live="polite">
           <div class="section-top"><h2>Debate timeline</h2><span>{{ debate.id.slice(0, 8) }} · {{ debate.status.toUpperCase() }}</span></div>
           <div class="panel status-panel">
             <div class="row"><strong>{{ completed ? 'Session finished' : 'Council deliberating' }}</strong><span class="pill" :class="debate.status === 'completed' ? 'fulfilled' : debate.status === 'running' ? 'working' : 'rejected'">{{ debate.status.toUpperCase() }}</span></div>
-            <p class="muted">Round {{ debate.round }} / {{ debate.request.maxRounds }} · {{ completedCount }} successful steps · {{ debate.entries.length }} recorded steps</p>
-            <div class="progress-track"><div class="progress-fill" :style="{ width: Math.min(100, (debate.events.filter((event) => event.type === 'stage').length / (1 + debate.request.maxRounds * 3)) * 100) + '%' }" /></div>
+            <p class="muted">Round {{ debate.round }} / {{ debate.request.maxRounds }} · {{ completedCount }} successful steps · {{ debate.entries.length }} recorded steps · {{ debate.calls ?? 0 }}/{{ debate.request.maxCalls ?? 40 }} calls</p>
+            <div class="progress-track"><div class="progress-fill" :style="{ width: (completed ? 100 : Math.min(99, (debate.events.filter((event) => event.type === 'stage').length / (1 + debate.request.maxRounds * 3)) * 100)) + '%' }" /></div>
             <p v-if="debate.phase" class="current-step">Current stage: {{ phaseTitles[debate.phase] }}</p>
             <p v-if="debate.error" class="warning">{{ debate.error }}</p>
           </div>
@@ -226,6 +241,15 @@ onBeforeUnmount(closeStream);
             </details>
             <small class="muted">{{ duration(entry.durationMs) }} · {{ formatTime(entry.createdAt) }}</small>
           </article>
+          <section v-if="(debate.objections ?? []).length" class="objections-panel panel">
+            <div class="section-top"><h2>Tracked objections</h2><span>{{ debate.objections.length }} records</span></div>
+            <article v-for="objection in debate.objections" :key="objection.id" class="objection-item">
+              <div class="row"><strong>{{ objection.claim }}</strong><span class="pill" :class="objection.resolution === 'accepted' || objection.resolution === 'partially_accepted' ? 'fulfilled' : 'working'">{{ objection.resolution }}</span></div>
+              <p class="muted">Round {{ objection.round }} · {{ labels[objection.author] }} → {{ labels[objection.target] }} · Severity: {{ objection.severity }}</p>
+              <p>{{ objection.criticism }}</p>
+              <p v-if="objection.response"><strong>Rebuttal:</strong> {{ objection.response }}</p>
+            </article>
+          </section>
           <div v-if="completed" class="final-note panel">
             <strong>Debate {{ debate.status }}</strong>
             <p>M2 stores revised proposals and objections separately. It does not claim the models reached consensus. Final voting, qualified agreements and synthesis are planned for M3.</p>

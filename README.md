@@ -16,7 +16,7 @@ npm run dev
 # Open http://127.0.0.1:5173
 ```
 
-Select **Multi-round debate**, pick two or three agents, enter an idea and choose 1–3 rounds (default 1). For a quick side-by-side response without further agent calls, switch to **Independent proposals**. `npm run dev:remote` exposes the Vite dev frontend on the LAN, while the unauthenticated API stays bound to 127.0.0.1; use only on trusted networks.
+Select **Multi-round debate**, pick two or three agents, enter an idea and choose 1–3 rounds (default 1). For a quick side-by-side response without further agent calls, switch to **Independent proposals**. Remote Vite development is deliberately disabled: proxying the unauthenticated API through a public Vite listener would expose privileged operations.
 
 ## How M2 debates work
 
@@ -26,9 +26,11 @@ Select **Multi-round debate**, pick two or three agents, enter an idea and choos
 4. **Full revisions** — each provider improves its proposal while preserving unresolved disagreements.
 5. **Optional additional rounds** — the latest successfully revised proposal is used as the next round's input.
 
+Each targeted critique requests structured JSON objections, with stable IDs and rebuttal resolutions (accepted, partially accepted, rejected, unresolved). Unparseable answers are kept as explicit unstructured/unresolved objections, never converted to assumed agreement.
+
 Critiques for one provider are deliberately serialized to avoid launching multiple concurrent sessions under that same CLI account; different providers can work in parallel. When a provider fails, the session keeps successful results and does not invent missing replies. If fewer than two initial proposals succeed, no debate is attempted. **Unanimity is neither calculated nor asserted in M2.**
 
-**Usage:** with three providers, a single round makes up to 15 model calls (3 proposals, 6 targeted critiques, 3 rebuttals, 3 revisions). Two rounds can make up to 27 calls. Each call can consume account quota or incur costs depending on your CLI and provider terms.
+**Usage:** with three providers, a single round makes up to 15 model calls (3 proposals, 6 targeted critiques, 3 rebuttals, 3 revisions). Two rounds can make up to 27 calls. Each call can consume account quota or incur costs depending on your CLI and provider terms. A debate defaults to a **40-call** and **15-minute** total budget, configurable up to 40 calls and 30 minutes; budget exhaustion is reported distinctly. Cancel an active session using the UI or API.
 
 ## API
 
@@ -40,7 +42,8 @@ The Fastify API listens on `127.0.0.1:8787` and is unauthenticated: do not expos
 - `POST /api/debates` — create an async M2 session, returns HTTP 202 with `id`
 - `GET /api/debates` — recent local sessions
 - `GET /api/debates/:id` — full timeline and stage outputs
-- `GET /api/debates/:id/events` — server-sent live update notifications
+- `GET /api/debates/:id/events` — server-sent live update notifications with increasing sequence IDs
+- `POST /api/debates/:id/cancel` — cancel current debate (202), or 409 if it already stopped
 
 Example:
 
@@ -54,9 +57,9 @@ Poll `GET /api/debates/<returned id>`, or subscribe to the SSE endpoint and refe
 
 ## Data and restart behavior
 
-Snapshots are atomically persisted after each stage and each agent response, by default under `.ace-data/debates/<uuid>.json`, which is gitignored. Override storage with `ACE_DATA_DIR=/private/path`. Session files contain the original idea, proposals, critiques, rebuttals and revisions **in plain text**; protect this folder if your ideas are confidential.
+Snapshots are atomically persisted after each stage and each agent response, by default under `.ace-data/debates/<uuid>.json`, which is gitignored. Override storage with `ACE_DATA_DIR=/private/path`. Session files contain the original idea, proposals, structured objections, critiques, rebuttals and revisions **in plain text**; protect this folder if your ideas are confidential.
 
-A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. **Automatic execution resume and cancellation are M4 work, not M2 features.** In M2 only one session can execute at a time per API process.
+A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. Cancelling or exceeding a time/call budget terminates active CLI process groups where supported and preserves the partial timeline. **Automatic execution resume and cancellation are M4 work, not M2 features.** In M2 only one session can execute at a time per API process.
 
 ## Limits and security
 
@@ -64,12 +67,13 @@ A process restart during an unfinished session preserves completed responses but
 - CLI processes run in empty temporary directories with best-effort read-only / plan-mode limitations. User-configured CLI hooks, extensions and tools may still have side effects; **this is not a hardened sandbox**.
 - Provider material is delimited and explicitly labeled untrusted. This mitigates but cannot eliminate prompt injection.
 - Incoming user prompts are limited to 12,000 characters. Outputs stored for each turn are capped at 25,000 characters and peer context is further bounded; trimming is labeled.
-- Execution limits are per CLI invocation; each round may take several minutes. Higher round counts greatly increase total calls and quota consumption.
+- Execution limits are per CLI invocation and per complete debate; each round may take several minutes. Higher round counts greatly increase total calls and quota consumption.
 - Responses are displayed as sanitized Markdown with DOMPurify. Raw provider stderr is never sent to clients.
 
 ## Development and CI
 
 ```bash
+npm ci
 npm test
 npm run typecheck
 npm run build

@@ -41,3 +41,18 @@ test('concurrent writes cannot overwrite the final snapshot', async () => {
     assert.equal((await store.get(session.id))?.round, 15);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('a failed write does not poison subsequent successful snapshot saves', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ace-store-recovery-'));
+  const { writeFile } = await import('node:fs/promises');
+  try {
+    const destination = join(root, 'debates');
+    await writeFile(destination, 'not a directory');
+    const store = new DebateStore(destination);
+    const session = createDebateSession({ prompt: 'Study startup reliability and operations', providers: ['codex', 'claude'], maxRounds: 1 });
+    await assert.rejects(store.save(session));
+    await rm(destination);
+    await store.save(session);
+    assert.equal((await store.get(session.id))?.id, session.id);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

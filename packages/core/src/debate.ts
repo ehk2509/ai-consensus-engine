@@ -3,9 +3,22 @@ import { validateRequest } from './brainstorm.ts';
 import type { AgentAdapter, BrainstormRequest, ProviderId } from './types.ts';
 
 export type DebatePhase = 'proposal' | 'critique' | 'rebuttal' | 'revision';
-export type DebateStatus = 'queued' | 'running' | 'completed' | 'partial' | 'insufficient' | 'failed' | 'interrupted';
+export type DebateStatus = 'queued' | 'running' | 'completed' | 'partial' | 'insufficient' | 'failed' | 'interrupted' | 'cancelled' | 'budget_exhausted';
 
-export interface DebateRequest extends BrainstormRequest { maxRounds: number }
+export interface DebateRequest extends BrainstormRequest { maxRounds: number; maxCalls?: number; maxDurationMs?: number }
+export interface DebateObjection {
+  id: string;
+  round: number;
+  author: ProviderId;
+  target: ProviderId;
+  claim: string;
+  criticism: string;
+  severity: 'low' | 'medium' | 'high' | 'unspecified';
+  evidence: string[];
+  suggestedChange?: string;
+  resolution: 'unresolved' | 'accepted' | 'partially_accepted' | 'rejected';
+  response?: string;
+}
 export interface DebateEntry {
   id: string;
   phase: DebatePhase;
@@ -36,6 +49,8 @@ export interface DebateSession {
   phase: DebatePhase | null;
   round: number;
   entries: DebateEntry[];
+  objections: DebateObjection[];
+  calls: number;
   events: DebateEvent[];
   error?: string;
 }
@@ -48,16 +63,21 @@ export function validateDebateRequest(value: unknown): DebateRequest {
   if (typeof maxRounds !== 'number' || !Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 3) {
     throw new Error('maxRounds must be an integer between 1 and 3.');
   }
-  return { ...base, maxRounds };
+  const maxCalls = obj.maxCalls === undefined ? 40 : obj.maxCalls;
+  const maxDurationMs = obj.maxDurationMs === undefined ? 900000 : obj.maxDurationMs;
+  if (typeof maxCalls !== 'number' || !Number.isInteger(maxCalls) || maxCalls < 2 || maxCalls > 40) throw new Error('maxCalls must be an integer between 2 and 40.');
+  if (typeof maxDurationMs !== 'number' || !Number.isInteger(maxDurationMs) || maxDurationMs < 10000 || maxDurationMs > 1800000) throw new Error('maxDurationMs must be an integer between 10000 and 1800000.');
+  return { ...base, maxRounds, maxCalls, maxDurationMs };
 }
 
 export function createDebateSession(request: DebateRequest): DebateSession {
   const now = new Date().toISOString();
-  return { id: randomUUID(), request, createdAt: now, updatedAt: now, status: 'queued', phase: null, round: 0, entries: [], events: [] };
+  return { id: randomUUID(), request: { ...request, maxCalls: request.maxCalls ?? 40, maxDurationMs: request.maxDurationMs ?? 900000 }, createdAt: now, updatedAt: now, status: 'queued', phase: null, round: 0, entries: [], objections: [], calls: 0, events: [] };
 }
 
 export type DebatePublisher = (session: DebateSession) => Promise<void>;
 const MAX_STORED_CHARS = 25000;
+const MAX_OBJECTIONS_PER_REVIEW = 8;
 function bounded(text: string, limit: number): string {
   const trimmed = text.trim();
   return trimmed.length <= limit ? trimmed : trimmed.slice(0, limit) + '\n\n[Truncated for context or display: original text was longer.]';
@@ -92,17 +112,19 @@ function promptForProposal(session: DebateSession): string {
     source('user_idea', session.request.prompt);
 }
 function promptForCritique(session: DebateSession, critic: ProviderId, target: ProviderId): string {
-  return HEADER + `\nStage: CRITIQUE, round ${session.round}. You are the independent author of ${label(critic, session.request.providers)}. Critique ${label(target, session.request.providers)} specifically.\nDiscuss: (1) strengths to keep, (2) important questionable assumptions or failure modes, (3) evidence or experiments that could settle disputes, (4) concrete improvements. No generic praise. Do not critique your own proposal.` +
+  return HEADER + `\nStage: CRITIQUE, round ${session.round}. You are the independent author of ${label(critic, session.request.providers)}. Critique ${label(target, session.request.providers)} specifically.\nReturn a JSON object (no Markdown fences): {"strengths":["..."],"objections":[{"claim":"specific disputed claim","criticism":"why it may fail","severity":"low|medium|high","evidence":["reason or verifiable source"],"suggestedChange":"action"}]}. Provide up to 8 specific objections; do not invent citations. If structured output is impossible, explain the concern clearly in Markdown. Do not critique your own proposal.` +
     source('user_idea', session.request.prompt, 6000) +
     source('your_current_proposal', latestContent(session, critic), 9000) +
     source('proposal_under_review', latestContent(session, target), 12000);
 }
 function promptForRebuttal(session: DebateSession, provider: ProviderId): string {
   const incoming = extract(session, 'critique', session.round, provider);
-  return HEADER + `\nStage: REBUTTAL, round ${session.round}. Respond to objections addressed to ${label(provider, session.request.providers)}.\nFor each objection, explicitly ACCEPT, REJECT WITH REASON, or PARTIALLY ACCEPT, and say what should change. Don't dismiss valid criticism just to win.` +
+  const objections = session.objections.filter((o) => o.round === session.round && o.target === provider);
+  return HEADER + `\nStage: REBUTTAL, round ${session.round}. Respond to objections addressed to ${label(provider, session.request.providers)}.\nReturn a JSON object with {"responses":[{"objectionId":"the exact supplied id","resolution":"accepted|partially_accepted|rejected|unresolved","reason":"your evidence-based reply"}]}. Address EACH supplied objection by its exact ID. Accept valid criticism; reject only with reasons. If you cannot return JSON, explain your responses clearly in Markdown; objections will remain unresolved.` +
     source('user_idea', session.request.prompt, 6000) +
     source('your_current_proposal', latestContent(session, provider), 12000) +
-    incoming.map((entry, i) => source(`critic_${i + 1}_feedback`, entry.content ?? '', 6500)).join('');
+    source('objections_with_stable_ids', JSON.stringify(objections), 13000) +
+    incoming.map((entry, i) => source(`critic_${i + 1}_feedback`, entry.content ?? '', 4500)).join('');
 }
 function promptForRevision(session: DebateSession, provider: ProviderId): string {
   const critiques = extract(session, 'critique', session.round, provider);
@@ -112,6 +134,49 @@ function promptForRevision(session: DebateSession, provider: ProviderId): string
     source('previous_proposal', latestContent(session, provider), 12000) +
     critiques.map((entry, i) => source(`peer_${i + 1}_critique`, entry.content ?? '', 5500)).join('') +
     (rebuttal ? source('your_rebuttal', rebuttal.content ?? '', 7000) : '');
+}
+
+function parseObject(text: string): Record<string, unknown> | null {
+  const raw = text.trim().replace(/^\s*```(?:json)?\s*\n?/i, '').replace(/\n?\s*```\s*$/, '');
+  try {
+    const obj: unknown = JSON.parse(raw);
+    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj as Record<string, unknown> : null;
+  } catch { return null; }
+}
+function captureObjections(session: DebateSession, entry: DebateEntry): void {
+  if (entry.phase !== 'critique' || entry.status !== 'fulfilled' || !entry.target) return;
+  const parsed = parseObject(entry.content ?? '');
+  const objects = parsed && Array.isArray(parsed.objections) ? parsed.objections.slice(0, MAX_OBJECTIONS_PER_REVIEW) : [];
+  const accepted = objects.filter((value): value is Record<string, unknown> =>
+    Boolean(value && typeof value === 'object' && typeof value.claim === 'string' && typeof value.criticism === 'string' &&
+      value.claim.trim() && value.criticism.trim()));
+  const fallback = accepted.length === 0 ? [{ claim: 'Unstructured peer critique', criticism: entry.content ?? '', severity: 'unspecified' }] : accepted;
+  for (const value of fallback) {
+    const severity = ['low', 'medium', 'high'].includes(String(value.severity)) ? value.severity as 'low' | 'medium' | 'high' : 'unspecified';
+    session.objections.push({
+      id: randomUUID(), round: entry.round, author: entry.provider, target: entry.target,
+      claim: bounded(String(value.claim), 1000), criticism: bounded(String(value.criticism), 4500),
+      severity, evidence: Array.isArray(value.evidence) ? value.evidence.filter((v): v is string => typeof v === 'string').slice(0, 5).map((v) => bounded(v, 700)) : [],
+      suggestedChange: typeof value.suggestedChange === 'string' ? bounded(value.suggestedChange, 1200) : undefined,
+      resolution: 'unresolved',
+    });
+  }
+}
+function applyRebuttal(session: DebateSession, entry: DebateEntry): void {
+  if (entry.phase !== 'rebuttal' || entry.status !== 'fulfilled') return;
+  const parsed = parseObject(entry.content ?? '');
+  if (!parsed || !Array.isArray(parsed.responses)) return;
+  const allowed = new Set(['accepted', 'partially_accepted', 'rejected', 'unresolved']);
+  for (const value of parsed.responses.slice(0, 24)) {
+    if (!value || typeof value !== 'object') continue;
+    const response = value as Record<string, unknown>;
+    const objection = session.objections.find((o) => o.id === response.objectionId &&
+      o.round === entry.round && o.target === entry.provider);
+    if (!objection || !allowed.has(String(response.resolution)) ||
+      typeof response.reason !== 'string' || !response.reason.trim()) continue;
+    objection.resolution = response.resolution as DebateObjection['resolution'];
+    objection.response = bounded(response.reason, 3000);
+  }
 }
 
 async function notify(session: DebateSession, publisher: DebatePublisher, event: Omit<DebateEvent, 'at' | 'sequence'>) {
@@ -124,22 +189,34 @@ async function notify(session: DebateSession, publisher: DebatePublisher, event:
 async function perform(
   session: DebateSession, adapters: ReadonlyMap<string, AgentAdapter>,
   publisher: DebatePublisher, phase: DebatePhase, round: number, provider: ProviderId,
-  prompt: string, target?: ProviderId,
+  prompt: string, target?: ProviderId, signal?: AbortSignal,
 ): Promise<void> {
   const start = performance.now();
   let entry: DebateEntry;
+  if (signal?.aborted || session.calls >= (session.request.maxCalls ?? 40)) {
+    entry = { id: randomUUID(), phase, round, provider, target, status: 'skipped',
+      error: signal?.aborted ? 'Execution cancelled or time limit reached.' : 'Session call budget exhausted.',
+      durationMs: 0, createdAt: new Date().toISOString() };
+    session.entries.push(entry);
+    await notify(session, publisher, { type: 'entry', phase, round, entryId: entry.id });
+    return;
+  }
+  session.calls += 1;
   try {
     const adapter = adapters.get(provider);
     if (!adapter) throw new Error('Missing adapter.');
-    const raw = await adapter.propose(prompt);
+    const raw = await adapter.propose(prompt, signal);
+    if (signal?.aborted) throw new Error('Cancelled');
     if (!raw.trim()) throw new Error('Empty response.');
     entry = { id: randomUUID(), phase, round, provider, target, status: 'fulfilled',
       content: bounded(raw, MAX_STORED_CHARS), durationMs: Math.round(performance.now() - start), createdAt: new Date().toISOString() };
   } catch (error) {
     entry = { id: randomUUID(), phase, round, provider, target, status: 'rejected',
-      error: safeError(error), durationMs: Math.round(performance.now() - start), createdAt: new Date().toISOString() };
+      error: signal?.aborted ? 'Execution cancelled or time limit reached.' : safeError(error), durationMs: Math.round(performance.now() - start), createdAt: new Date().toISOString() };
   }
   session.entries.push(entry);
+  captureObjections(session, entry);
+  applyRebuttal(session, entry);
   await notify(session, publisher, { type: 'entry', phase, round, entryId: entry.id });
 }
 
@@ -159,32 +236,40 @@ async function stage(
  */
 export async function executeDebate(
   session: DebateSession, adapters: ReadonlyMap<string, AgentAdapter>, publisher: DebatePublisher,
+  externalSignal?: AbortSignal,
 ): Promise<DebateSession> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onCancel = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  externalSignal?.addEventListener('abort', onCancel, { once: true });
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, session.request.maxDurationMs ?? 900000);
+  const signal = controller.signal;
   session.status = 'running';
   await notify(session, publisher, { type: 'started' });
   try {
     await stage(session, publisher, 'proposal', 0, async () => {
       await Promise.all(session.request.providers.map((provider) =>
-        perform(session, adapters, publisher, 'proposal', 0, provider, promptForProposal(session))));
+        perform(session, adapters, publisher, 'proposal', 0, provider, promptForProposal(session), undefined, signal)));
     });
     const participants = session.request.providers.filter((provider) =>
       session.entries.some((e) => e.provider === provider && e.phase === 'proposal' && e.status === 'fulfilled'));
     if (participants.length < 2) {
       session.status = 'insufficient';
     } else {
-      for (let round = 1; round <= session.request.maxRounds; round++) {
+      for (let round = 1; round <= session.request.maxRounds && !signal.aborted; round++) {
         await stage(session, publisher, 'critique', round, async () => {
           await Promise.all(participants.map(async (provider) => {
             for (const target of participants) {
               if (provider !== target) await perform(session, adapters, publisher, 'critique', round,
-                provider, promptForCritique(session, provider, target), target);
+                provider, promptForCritique(session, provider, target), target, signal);
             }
           }));
         });
         await stage(session, publisher, 'rebuttal', round, async () => {
           await Promise.all(participants.map((provider) => {
             const critiques = extract(session, 'critique', round, provider);
-            if (critiques.length) return perform(session, adapters, publisher, 'rebuttal', round, provider, promptForRebuttal(session, provider));
+            if (critiques.length) return perform(session, adapters, publisher, 'rebuttal', round, provider, promptForRebuttal(session, provider), undefined, signal);
             const skipped: DebateEntry = { id: randomUUID(), phase: 'rebuttal', round, provider, status: 'skipped',
               durationMs: 0, createdAt: new Date().toISOString(), error: 'No successful incoming critiques.' };
             session.entries.push(skipped);
@@ -193,15 +278,19 @@ export async function executeDebate(
         });
         await stage(session, publisher, 'revision', round, async () => {
           await Promise.all(participants.map((provider) =>
-            perform(session, adapters, publisher, 'revision', round, provider, promptForRevision(session, provider))));
+            perform(session, adapters, publisher, 'revision', round, provider, promptForRevision(session, provider), undefined, signal)));
         });
       }
-      session.status = session.entries.some((entry) => entry.status === 'rejected') ? 'partial' : 'completed';
+      session.status = session.entries.some((entry) => entry.status === 'skipped' && entry.error === 'Session call budget exhausted.') ? 'budget_exhausted' :
+        session.entries.some((entry) => entry.status === 'rejected') ? 'partial' : 'completed';
     }
   } catch {
     session.status = 'failed';
     session.error = 'Debate could not complete. Check server logs and local storage.';
   }
+  clearTimeout(timer);
+  externalSignal?.removeEventListener('abort', onCancel);
+  if (signal.aborted) session.status = timedOut ? 'budget_exhausted' : 'cancelled';
   session.phase = null;
   session.finishedAt = new Date().toISOString();
   await notify(session, publisher, { type: 'finished' });

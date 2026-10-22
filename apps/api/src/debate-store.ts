@@ -21,7 +21,7 @@ export class DebateStore {
     const snapshot = JSON.stringify(session);
     const id = session.id;
     const previous = this.writes.get(id) ?? Promise.resolve();
-    const next = previous.then(async () => {
+    const next = previous.catch(() => { /* A failed write must not poison later snapshots. */ }).then(async () => {
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
       const tmp = this.filename(id) + '.' + randomUUID() + '.tmp';
       try {

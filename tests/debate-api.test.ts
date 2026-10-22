@@ -44,3 +44,33 @@ test('creates asynchronous debates, streams completed state and retrieves histor
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('API cancellation stops active debate and records cancelled status', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ace-api-cancel-'));
+  const wait = async (_prompt: string, signal?: AbortSignal): Promise<string> => new Promise((resolve) => {
+    if (signal?.aborted) { resolve('Cancelled'); return; }
+    signal?.addEventListener('abort', () => resolve('Cancelled'), { once: true });
+  });
+  const adapters = new Map<string, AgentAdapter>([['codex', { id: 'codex', propose: wait }], ['claude', { id: 'claude', propose: wait }]]);
+  const app = makeApp({ adapters, store: new DebateStore(dir) });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/debates', payload: {
+      prompt: 'Analyze cancellation of multi-agent deliberation', providers: ['codex', 'claude'], maxRounds: 1,
+    } });
+    const id = (created.json() as { id: string }).id;
+    const cancel = await app.inject({ method: 'POST', url: '/api/debates/' + id + '/cancel' });
+    assert.equal(cancel.statusCode, 202);
+    let status = 'queued';
+    for (let i = 0; i < 80; i++) {
+      const current = await app.inject({ method: 'GET', url: '/api/debates/' + id });
+      status = (current.json() as DebateSession).status;
+      if (status !== 'queued' && status !== 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(status, 'cancelled');
+    assert.equal((await app.inject({ method: 'POST', url: '/api/debates/' + id + '/cancel' })).statusCode, 409);
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
