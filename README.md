@@ -4,7 +4,7 @@
 
 Local-first, multi-provider brainstorming and structured AI deliberation powered by your installed **OpenAI Codex**, **Claude Code**, and **Gemini through Antigravity** CLI sessions.
 
-> **Current milestone: M2 — iterative debate, NOT final consensus.** M1's independent brainstorming remains available. M2 adds targeted peer critique, individual rebuttals, full revisions, local session history, and live updates. Consensus voting and consolidated verdicts will be delivered in M3.
+> **Current milestone: M3 — explicit consensus evaluation.** Following independent proposals, critiques, rebuttals and revisions, the optional M3 council drafts a shared proposal, gathers independently structured votes, and produces a transparent decision record. Agreement is never fabricated when ballots fail or critical concerns remain.
 
 ## Quick start
 
@@ -44,6 +44,7 @@ The Fastify API listens on `127.0.0.1:8787` and is unauthenticated: do not expos
 - `GET /api/debates/:id` — full timeline and stage outputs
 - `GET /api/debates/:id/events` — server-sent live update notifications with increasing sequence IDs
 - `POST /api/debates/:id/cancel` — cancel current debate (202), or 409 if it already stopped
+- `GET /api/debates/:id/report` — download recorded M3 decision report as Markdown (409 when absent)
 
 Example:
 
@@ -55,11 +56,21 @@ curl -sS http://127.0.0.1:8787/api/debates \
 
 Poll `GET /api/debates/<returned id>`, or subscribe to the SSE endpoint and refetch the session on each `update` event.
 
+## M3 voting, safety and consensus rules
+
+Turn on **Generate independent consensus votes** (enabled by default in the Vue interface). The `POST /api/debates` API keeps backwards-compatible M2 behavior unless `"consensus":true` is supplied. Set `"quorum":"unanimous"` (default) or `"quorum":"two_thirds"`, and `"blockCritical":true` (default). Each complete debate generates one frozen shared draft, then every selected model independently votes `accept`, `conditional`, or `reject`. Only `accept` counts toward quorum, and missing or malformed votes yield `incomplete`, never consensus.
+
+With the critical gate enabled, high-severity and unstructured objections from the **last debate round** must be explicitly signed off by their original authors in their independent accept ballots; a target model's self-reported rebuttal is not proof of resolution. Outcomes are `unanimous`, `qualified`, `disputed`, `blocked`, `incomplete` or `not_assessed`. All dissent and objection IDs remain visible.
+
+With three models and one round, voting takes **19 calls** total (15 debate + 1 draft + 3 ballots). With three rounds, M2 alone may reach 39 calls, exceeding the 40-call cap once consensus is included. In that case M3 is `not_assessed`. Reduce rounds, choose fewer models, or keep M3 off; the product never silently increases the session's call budget.
+
+Evidence claims in a generated draft are recorded as **unverified**. The app does not independently browse, validate references or treat multiple-model agreement as factual truth. The final Markdown report is assembled deterministically from the frozen proposal, recorded ballots and blockers, and can be retrieved via `GET /api/debates/:id/report` (409 if unavailable).
+
 ## Data and restart behavior
 
 Snapshots are atomically persisted after each stage and each agent response, by default under `.ace-data/debates/<uuid>.json`, which is gitignored. Override storage with `ACE_DATA_DIR=/private/path`. Session files contain the original idea, proposals, structured objections, critiques, rebuttals and revisions **in plain text**; protect this folder if your ideas are confidential.
 
-A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. Cancelling or exceeding a time/call budget terminates active CLI process groups where supported and preserves the partial timeline. **Automatic execution resume and cancellation are M4 work, not M2 features.** In M2 only one session can execute at a time per API process.
+A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. Cancelling or exceeding a time/call budget terminates active CLI process groups where supported and preserves the partial timeline. **Automatic execution resume** remains M4 work; explicit cancellation is already supported. In M2 only one session can execute at a time per API process.
 
 ## Limits and security
 
@@ -84,8 +95,8 @@ Tech stack: Fastify, Vue 3/Vite, TypeScript, Node test runner, local CLI adapter
 ## Roadmap
 
 - **M1:** Three independent providers, parallel proposals and local UI — implemented
-- **M2:** Cross-review, rebuttals, revisions, history and live progress — implemented in this PR
-- **M3:** Explicit voting, evidence, disagreements and qualified consensus reports
+- **M2:** Cross-review, rebuttals, revisions, history and live progress — merged
+- **M3:** Explicit voting, traceable evidence claims, dissent and qualified consensus reports — implemented in this PR
 - **M4:** Production-grade authentication, cancellation/resume, durable worker queue, CLI isolation, API adapters, quotas and benchmarks
 
 The goal is a **traceable, defensible decision**, not artificial agreement.
@@ -99,3 +110,13 @@ ACE_LIVE_SMOKE=I_ACCEPT_MODEL_USAGE npm run smoke:live
 ```
 
 Use this only when your authenticated CLIs have sufficient quota. The smoke persists a local session. No external-provider smoke has yet been run in CI.
+
+## M3 local live smoke (opt-in)
+
+M2 smoke remains `npm run smoke:live` (15 real CLI calls). To explicitly authorize a 19-call M3 flow with your authenticated CLI accounts, run:
+
+```bash
+ACE_LIVE_SMOKE=I_ACCEPT_MODEL_USAGE npm run smoke:consensus
+```
+
+CI uses deterministic stub models and CLI-process integration tests; it cannot verify your personal authenticated CLI accounts. Check session outcome, votes, objections and report after the live smoke.

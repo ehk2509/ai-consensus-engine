@@ -1,11 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { validateRequest } from './brainstorm.ts';
 import type { AgentAdapter, BrainstormRequest, ProviderId } from './types.ts';
+import { executeConsensus } from './consensus.ts';
+import type { ConsensusState } from './consensus.ts';
 
-export type DebatePhase = 'proposal' | 'critique' | 'rebuttal' | 'revision';
+export type DebatePhase = 'proposal' | 'critique' | 'rebuttal' | 'revision' | 'synthesis' | 'vote';
 export type DebateStatus = 'queued' | 'running' | 'completed' | 'partial' | 'insufficient' | 'failed' | 'interrupted' | 'cancelled' | 'budget_exhausted';
 
-export interface DebateRequest extends BrainstormRequest { maxRounds: number; maxCalls?: number; maxDurationMs?: number }
+export interface DebateRequest extends BrainstormRequest {
+  maxRounds: number;
+  maxCalls?: number;
+  maxDurationMs?: number;
+  consensus?: boolean;
+  quorum?: 'unanimous' | 'two_thirds';
+  blockCritical?: boolean;
+}
 export interface DebateObjection {
   id: string;
   round: number;
@@ -50,6 +59,7 @@ export interface DebateSession {
   round: number;
   entries: DebateEntry[];
   objections: DebateObjection[];
+  consensus?: ConsensusState;
   calls: number;
   events: DebateEvent[];
   error?: string;
@@ -67,7 +77,13 @@ export function validateDebateRequest(value: unknown): DebateRequest {
   const maxDurationMs = obj.maxDurationMs === undefined ? 900000 : obj.maxDurationMs;
   if (typeof maxCalls !== 'number' || !Number.isInteger(maxCalls) || maxCalls < 2 || maxCalls > 40) throw new Error('maxCalls must be an integer between 2 and 40.');
   if (typeof maxDurationMs !== 'number' || !Number.isInteger(maxDurationMs) || maxDurationMs < 10000 || maxDurationMs > 1800000) throw new Error('maxDurationMs must be an integer between 10000 and 1800000.');
-  return { ...base, maxRounds, maxCalls, maxDurationMs };
+  const consensus = obj.consensus === undefined ? false : obj.consensus;
+  const quorum = obj.quorum === undefined ? 'unanimous' : obj.quorum;
+  const blockCritical = obj.blockCritical === undefined ? true : obj.blockCritical;
+  if (typeof consensus !== 'boolean') throw new Error('consensus must be a boolean.');
+  if (quorum !== 'unanimous' && quorum !== 'two_thirds') throw new Error('quorum must be unanimous or two_thirds.');
+  if (typeof blockCritical !== 'boolean') throw new Error('blockCritical must be a boolean.');
+  return { ...base, maxRounds, maxCalls, maxDurationMs, consensus, quorum, blockCritical };
 }
 
 export function createDebateSession(request: DebateRequest): DebateSession {
@@ -287,6 +303,17 @@ export async function executeDebate(
   } catch {
     session.status = 'failed';
     session.error = 'Debate could not complete. Check server logs and local storage.';
+  }
+  if (session.request.consensus && !signal.aborted) {
+    const debateOutcome = session.status;
+    try {
+      await executeConsensus(session, adapters, publisher, signal);
+      if (session.status === 'running') session.status = debateOutcome;
+    }
+    catch (error) {
+      session.error = 'Consensus stage could not complete; earlier debate records remain available.';
+      session.status = 'failed';
+    }
   }
   clearTimeout(timer);
   externalSignal?.removeEventListener('abort', onCancel);

@@ -9,7 +9,7 @@ type Mode = 'debate' | 'independent';
 type SessionSummary = { id: string; prompt: string; providers: ProviderId[]; maxRounds: number; createdAt: string; updatedAt: string; status: DebateStatus; round: number };
 const labels: Record<ProviderId, string> = { codex: 'Codex · OpenAI', claude: 'Claude Code', gemini: 'Gemini · Antigravity' };
 const phases: DebatePhase[] = ['proposal', 'critique', 'rebuttal', 'revision'];
-const phaseTitles: Record<DebatePhase, string> = { proposal: 'Independent proposals', critique: 'Peer critiques', rebuttal: 'Rebuttals', revision: 'Revised proposals' };
+const phaseTitles: Record<DebatePhase, string> = { proposal: 'Independent proposals', critique: 'Peer critiques', rebuttal: 'Rebuttals', revision: 'Revised proposals', synthesis: 'Shared draft', vote: 'Independent voting' };
 const options: ProviderId[] = ['codex', 'claude', 'gemini'];
 const selected = ref<ProviderId[]>([...options]);
 const mode = ref<Mode>('debate');
@@ -17,6 +17,9 @@ const prompt = ref('');
 const maxRounds = ref(1);
 const maxCalls = ref(40);
 const maxDurationMinutes = ref(15);
+const consensusEnabled = ref(true);
+const quorum = ref<'unanimous' | 'two_thirds'>('unanimous');
+const blockCritical = ref(true);
 const pending = ref(false);
 const result = ref<BrainstormResult | null>(null);
 const debate = ref<DebateSession | null>(null);
@@ -38,6 +41,7 @@ const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry)
   (visibleRound.value === -1 || entry.round === visibleRound.value)));
 const completed = computed(() => Boolean(debate.value && !['queued', 'running'].includes(debate.value.status)));
 const completedCount = computed(() => debate.value?.entries.filter((entry) => entry.status === 'fulfilled').length ?? 0);
+const estimatedCalls = computed(() => selected.value.length + maxRounds.value * (selected.value.length * (selected.value.length - 1) + 2 * selected.value.length) + (consensusEnabled.value ? selected.value.length + 1 : 0));
 
 function markdown(content: string): string {
   return DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
@@ -135,7 +139,7 @@ async function submit() {
     const isDebate = mode.value === 'debate';
     const response = await fetch(isDebate ? '/api/debates' : '/api/brainstorms', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000 } : {}) }),
+      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000, consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value } : {}) }),
     });
     const body: unknown = await response.json();
     if (!response.ok) {
@@ -171,10 +175,10 @@ onBeforeUnmount(closeStream);
 
 <template>
   <main class="shell">
-    <div class="eyebrow">MULTI-MODEL THINKING STUDIO · M2</div>
+    <div class="eyebrow">MULTI-MODEL THINKING STUDIO · M3</div>
     <header>
       <div><h1>AI Consensus <span>Engine</span></h1><p>One idea. Multiple intelligences. A better-informed decision.</p></div>
-      <span class="phase">02 / COLLABORATIVE DEBATE</span>
+      <span class="phase">03 / CONSENSUS COUNCIL</span>
     </header>
     <div class="app-layout">
       <div class="workspace">
@@ -207,7 +211,18 @@ onBeforeUnmount(closeStream);
           <div><strong>Execution budget</strong><p class="muted">Never exceed this many model calls or minutes. Default one-round three-agent debate needs up to 15 calls.</p></div>
           <div class="budget-controls"><label>Max calls <select v-model.number="maxCalls" :disabled="pending"><option v-for="n in [8, 15, 27, 39, 40]" :key="n" :value="n">{{ n }}</option></select></label><label>Minutes <select v-model.number="maxDurationMinutes" :disabled="pending"><option v-for="n in [3, 5, 10, 15, 30]" :key="n" :value="n">{{ n }}</option></select></label></div>
         </div>
-        <div class="row footer-row"><span class="muted">Uses your local CLI logins. No voting or forced agreement in M2.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
+        <div v-if="mode === 'debate'" class="consensus-config">
+          <label class="consensus-toggle"><input v-model="consensusEnabled" type="checkbox" :disabled="pending" /> Generate independent consensus votes and final report</label>
+          <div v-if="consensusEnabled" class="consensus-options">
+            <label>Acceptance policy
+              <select v-model="quorum" :disabled="pending" aria-label="Voting policy"><option value="unanimous">Unanimous</option><option value="two_thirds">At least two-thirds</option></select>
+            </label>
+            <label class="consensus-toggle"><input v-model="blockCritical" type="checkbox" :disabled="pending" /> Block unresolved critical objections</label>
+          </div>
+          <p class="muted">Approximate maximum: {{ estimatedCalls }} model calls for selected providers and rounds. Voting never implies facts have been verified.</p>
+          <p v-if="estimatedCalls > maxCalls" class="warning" role="status">The configured {{ maxCalls }}-call budget may prevent consensus voting. Reduce rounds or turn off voting.</p>
+        </div>
+        <div class="row footer-row"><span class="muted">Local accounts · Traceable objections, independent votes, no forced agreement.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
           <p v-if="error" class="error" role="alert">{{ error }}</p>
           <p v-if="connection" class="warning" role="status">{{ connection }}</p>
           <button v-if="pending && debate" class="cancel-action" type="button" @click="cancelDebate">Cancel current debate</button>
@@ -217,7 +232,7 @@ onBeforeUnmount(closeStream);
           <div class="panel status-panel">
             <div class="row"><strong>{{ completed ? 'Session finished' : 'Council deliberating' }}</strong><span class="pill" :class="debate.status === 'completed' ? 'fulfilled' : debate.status === 'running' ? 'working' : 'rejected'">{{ debate.status.toUpperCase() }}</span></div>
             <p class="muted">Round {{ debate.round }} / {{ debate.request.maxRounds }} · {{ completedCount }} successful steps · {{ debate.entries.length }} recorded steps · {{ debate.calls ?? 0 }}/{{ debate.request.maxCalls ?? 40 }} calls</p>
-            <div class="progress-track"><div class="progress-fill" :style="{ width: (completed ? 100 : Math.min(99, (debate.events.filter((event) => event.type === 'stage').length / (1 + debate.request.maxRounds * 3)) * 100)) + '%' }" /></div>
+            <div class="progress-track"><div class="progress-fill" :style="{ width: (completed ? 100 : Math.min(99, (debate.events.filter((event) => event.type === 'stage').length / (1 + debate.request.maxRounds * 3 + (debate.request.consensus ? 2 : 0))) * 100)) + '%' }" /></div>
             <p v-if="debate.phase" class="current-step">Current stage: {{ phaseTitles[debate.phase] }}</p>
             <p v-if="debate.error" class="warning">{{ debate.error }}</p>
           </div>
@@ -250,9 +265,35 @@ onBeforeUnmount(closeStream);
               <p v-if="objection.response"><strong>Rebuttal:</strong> {{ objection.response }}</p>
             </article>
           </section>
-          <div v-if="completed" class="final-note panel">
+          <section v-if="debate.consensus" class="panel consensus-report">
+            <div class="section-top">
+              <h2>Consensus decision</h2>
+              <span class="pill" :class="['unanimous', 'qualified'].includes(debate.consensus.status) ? 'fulfilled' : 'working'">{{ debate.consensus.status.replaceAll('_', ' ') }}</span>
+            </div>
+            <p class="muted">{{ debate.consensus.reason || 'The council is evaluating the shared draft.' }}</p>
+            <p class="muted">Quorum: {{ debate.consensus.policy.quorum.replace('_', '-') }} · Critical objection gate: {{ debate.consensus.policy.blockCritical ? 'Enabled' : 'Disabled' }} · {{ debate.consensus.votes.length }} ballots</p>
+            <div v-if="debate.consensus.draft" class="draft-wrap">
+              <div class="row"><strong>Frozen shared proposal</strong><span class="muted">Facilitator: {{ labels[debate.consensus.draft.author] }}</span></div>
+              <div class="markdown response" v-html="markdown(debate.consensus.draft.proposal)" />
+            </div>
+            <div v-if="debate.consensus.votes.length" class="voting-grid">
+              <article v-for="vote in debate.consensus.votes" :key="vote.provider" class="vote-record">
+                <div class="row"><strong>{{ labels[vote.provider] }}</strong><span class="pill" :class="vote.verdict === 'accept' ? 'fulfilled' : 'working'">{{ vote.verdict || 'invalid vote' }}</span></div>
+                <p>{{ vote.rationale || vote.error }}</p>
+                <p v-if="vote.concerns.length" class="muted">Concerns: {{ vote.concerns.join('; ') }}</p>
+                <p class="muted">{{ vote.resolvedObjectionIds.length }} objections independently signed off</p>
+              </article>
+            </div>
+            <div v-if="debate.consensus.blockingObjectionIds.length" class="warning">{{ debate.consensus.blockingObjectionIds.length }} unresolved critical objections block consensus under this policy.</div>
+            <div v-if="debate.consensus.draft?.evidence.length" class="evidence-register">
+              <h3>Evidence register — not independently verified</h3>
+              <div v-for="evidence in debate.consensus.draft.evidence" :key="evidence.id" class="evidence-item"><strong>{{ evidence.id }}</strong> {{ evidence.claim }} <span class="muted">{{ evidence.source ? 'Reported source: ' + evidence.source : 'No source provided' }}</span></div>
+            </div>
+            <a v-if="debate.consensus.reportMarkdown" class="download-report" :href="'/api/debates/' + debate.id + '/report'">Download decision report (.md) ↗</a>
+          </section>
+          <div v-if="completed && !debate.consensus" class="final-note panel">
             <strong>Debate {{ debate.status }}</strong>
-            <p>M2 stores revised proposals and objections separately. It does not claim the models reached consensus. Final voting, qualified agreements and synthesis are planned for M3.</p>
+            <p>This run did not request consensus voting. M3 voting is optional for API clients and enabled by default in the UI.</p>
           </div>
         </section>
         <section v-if="result" class="results">
@@ -279,6 +320,6 @@ onBeforeUnmount(closeStream);
         <p class="side-note">Debates are stored locally in <code>.ace-data/debates</code>. The app does not save your CLI account credentials.</p>
       </aside>
     </div>
-    <footer>Local-first M2 · Traceable critique, rebuttal, and revision · Consensus voting arrives in M3</footer>
+    <footer>Local-first M3 · Independent voting and traceable consensus · Evidence claims remain unverified</footer>
   </main>
 </template>

@@ -22,7 +22,7 @@ export function makeApp(options: AppOptions = {}) {
   const publish = async (session: DebateSession) => { await store.save(session); broadcast(session); };
   app.addHook('onClose', async () => { for (const controller of controllers.values()) controller.abort(); });
 
-  app.get('/api/health', async () => ({ status: 'ok', version: '0.2.0', milestone: 'M2' }));
+  app.get('/api/health', async () => ({ status: 'ok', version: '0.3.0', milestone: 'M3' }));
   app.get('/api/providers', async () => {
     const probes = await probeInstalledClis();
     return {
@@ -84,6 +84,16 @@ export function makeApp(options: AppOptions = {}) {
     }
     if (!await store.get(request.params.id)) return reply.code(404).send({ error: 'Session not found.' });
     return reply.code(409).send({ error: 'Session is not currently running.' });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/debates/:id/report', async (request, reply) => {
+    const session = await store.get(request.params.id);
+    if (!session) return reply.code(404).send({ error: 'Session not found.' });
+    if (!session.consensus?.reportMarkdown) return reply.code(409).send({ error: 'No complete consensus report is available for this session.' });
+    reply.header('Cache-Control', 'no-store');
+    reply.header('Content-Type', 'text/markdown; charset=utf-8');
+    reply.header('Content-Disposition', `attachment; filename="consensus-${session.id}.md"`);
+    return session.consensus.reportMarkdown;
   });
 
   app.get('/api/debates', async () => {
