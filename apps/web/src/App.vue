@@ -102,7 +102,8 @@ async function openHistory(id: string) {
   mode.value = 'debate';
   pending.value = false;
   await loadSession(id);
-  if (debate.value && ['queued', 'running'].includes(debate.value.status)) {
+  const restored = debate.value as DebateSession | null;
+  if (restored && ['queued', 'running'].includes(restored.status)) {
     pending.value = true;
     subscribe(id);
   }
