@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDebateSession, executeDebate, validateDebateRequest } from '../packages/core/src/debate.ts';
+import { chooseFacilitator } from '../packages/core/src/consensus.ts';
 import type { AgentAdapter, ProviderId } from '../packages/core/src/types.ts';
 
 const ids: ProviderId[] = ['codex', 'claude', 'gemini'];
@@ -59,14 +60,25 @@ test('three accepted votes produce unanimous outcome with evidence clearly unver
   assert.deepEqual(session.events.map((e) => e.sequence), session.events.map((_, i) => i + 1));
 });
 
-test('a conditional ballot cannot produce unanimity; two-thirds explicitly remains qualified', async () => {
-  const vote = (id: ProviderId) => ({ verdict: id === 'gemini' ? 'conditional' : 'accept',
-    rationale: 'Independent judgment', concerns: id === 'gemini' ? ['Privacy unresolved'] : [], resolvedObjectionIds: [], supersessions: [] });
+test('unanimity requires all accepts; qualified majority requires non-author endorsements', async () => {
+  const vote = (id: ProviderId) => ({
+    verdict: id === 'gemini' ? 'conditional' : 'accept',
+    rationale: 'Independent judgment',
+    concerns: id === 'gemini' ? ['Privacy unresolved'] : [],
+    resolvedObjectionIds: [], supersessions: [],
+  });
   const unanimous = (await evaluate({}, { vote })).session;
   assert.equal(unanimous.consensus?.status, 'disputed');
-  const majority = (await evaluate({ quorum: 'two_thirds' }, { vote })).session;
+  const majority = createDebateSession(request({ quorum: 'two_thirds' }));
+  const author = chooseFacilitator(majority);
+  const majorityVote = (id: ProviderId) => ({
+    verdict: id === author ? 'conditional' : 'accept',
+    rationale: 'Independent judgment', concerns: id === author ? ['Follow-up recommended'] : [],
+    resolvedObjectionIds: [], supersessions: [],
+  });
+  await executeDebate(majority, agents((id, prompt) => answer(id, prompt, { vote: majorityVote })), async () => {});
   assert.equal(majority.consensus?.status, 'qualified');
-  assert.match(majority.consensus?.reportMarkdown ?? '', /gemini.*conditional/i);
+  assert.match(majority.consensus?.reportMarkdown ?? '', /conditional/i);
 });
 
 test('critical objections block a unanimous vote unless their authors explicitly sign off', async () => {

@@ -147,7 +147,7 @@ function report(session: DebateSession, state: ConsensusState): string {
 
 ## Proposed synthesis
 
-${state.draft?.proposal ?? '*No valid synthesis draft.*'}
+${state.draft?.proposal?.trim() ? state.draft.proposal : '*No valid synthesis draft.*'}
 
 ## Independent votes
 
