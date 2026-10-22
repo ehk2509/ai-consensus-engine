@@ -10,7 +10,7 @@ A local-first multi-AI brainstorming application that gathers independently reas
 
 Requires **Node.js 22.12+** plus the CLIs you plan to use. Install and authenticate **codex**, **claude**, and **agy** (Antigravity CLI) using each provider's official instructions. Gemini CLI no longer supports Google OAuth login, so Gemini is reached through Antigravity: run `agy` once interactively to sign in. Existing consumer subscriptions do not necessarily include separate API access. Each CLI uses its own local authentication state and usage limits.
 
-1. Install dependencies: `npm install`
+1. Install dependencies: `npm ci`
 2. Launch the UI and local API: `npm run dev`
 3. Open http://127.0.0.1:5173
 4. Enter an idea, choose your providers, and run your first independent brainstorm.
