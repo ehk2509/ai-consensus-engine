@@ -193,7 +193,8 @@ ${state.draft?.assumptions.map((v) => '- ' + v).join('\n') || 'Not available.'}
 
 - Clarification attempts: ${state.clarificationAttempts?.length ?? 0}
 - Original ballot attempts: ${state.clarificationAttempts?.map(v => v.provider + ': ' + (v.error ?? v.verdict)).join('; ') || 'none'}
-- Resolution attempts: ${state.resolutionAttempts?.map(v => v.provider + ' (' + v.objectionIds.length + ' IDs) ' + (v.error ?? 'processed')).join('; ') || 'none'}
+- Resolution attempts: ${state.resolutionAttempts?.length ?? 0}
+- Resolution detail: ${state.resolutionAttempts?.map(v => v.provider + ' (' + v.objectionIds.length + ' IDs) ' + (v.error ?? 'processed')).join('; ') || 'none'}
 
 ## Audit
 
@@ -273,7 +274,7 @@ function parseVote(raw: string, provider: ProviderId, session: DebateSession, dr
   if (parsed.verdict === 'accept' && parsed.concerns.some((c: string) => !!c.trim())) {
     throw new Error('A ballot with unresolved concerns cannot be unconditional acceptance.');
   }
-  if (parsed.verdict === 'accept' && /(?:cannot|can't|unable to|could not|not able to|ne peux pas|impossible de)\\s+(?:fully\\s+)?(?:confirm|verify|validate|confirmer|vérifier)|\\b(?:unacceptable|inacceptable|unresolved|unverified blocker|reste ouverte|non résolu|not resolved)\\b/i.test(parsed.rationale as string)) {
+  if (parsed.verdict === 'accept' && /(?:cannot|can't|unable to|could not|not able to|ne peux pas|impossible de)\s+(?:fully\s+)?(?:confirm|verify|validate|confirmer|vérifier)|\b(?:unacceptable|inacceptable|unresolved|unverified blocker|reste ouverte|non résolu|not resolved)\b/i.test(parsed.rationale as string)) {
     throw new Error('Contradictory accept ballot: rationale disclaims confirmation or describes an unresolved issue. Requires clarification.');
   }
   const owned = session.objections.filter((o) => o.author === provider);
