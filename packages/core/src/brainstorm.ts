@@ -20,6 +20,8 @@ function safeError(error: unknown): string {
   return error instanceof Error && error.name === 'AgentExecutionError' ? error.message : 'Provider failed unexpectedly.';
 }
 
+const INDEPENDENT_INSTRUCTIONS = 'You are independently brainstorming an idea. Present your own concrete solution, assumptions, tradeoffs, alternatives and validation tests. Do not invent other agents\' views, access tools, or modify files.\n\nUSER IDEA:\n';
+
 export async function brainstorm(
   request: BrainstormRequest,
   adapters: ReadonlyMap<string, AgentAdapter>,
@@ -30,7 +32,7 @@ export async function brainstorm(
     try {
       const adapter = adapters.get(provider);
       if (!adapter) throw new Error('Unavailable adapter');
-      const content = (await adapter.propose(request.prompt)).trim();
+      const content = (await adapter.propose(INDEPENDENT_INSTRUCTIONS + request.prompt)).trim();
       if (!content) throw new Error('Empty proposal');
       return { provider, status: 'fulfilled' as const, content, durationMs: Math.round(performance.now() - start) };
     } catch (error) {

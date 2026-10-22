@@ -38,3 +38,20 @@ test('encodes Antigravity stdin as a single stream-json user message', () => {
   assert.equal(encoded.trimEnd().split('\n').length, 1);
   assert.deepEqual(JSON.parse(encoded), { event: 'user', message: { content: 'line one\nline "two"' } });
 });
+
+test('kills descendant processes when a CLI times out (POSIX)', { skip: process.platform === 'win32' }, async () => {
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'ace-tree-'));
+  const sentinel = join(dir, 'unexpected-child-output');
+  try {
+    const grandchild = 'setTimeout(() => require("node:fs").writeFileSync(' + JSON.stringify(sentinel) + ', "orphan"), 850)';
+    const parent = 'require("node:child_process").spawn(process.execPath, ["-e", ' + JSON.stringify(grandchild) + '], {stdio:"ignore"});setInterval(()=>{},1000)';
+    await assert.rejects(runAgentProcess({ executable: node, args: ['-e', parent], stdin: '', timeoutMs: 250 }), AgentExecutionError);
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+    await assert.rejects(readFile(sentinel, 'utf8'), { code: 'ENOENT' });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

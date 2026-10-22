@@ -1,8 +1,6 @@
 import type { AgentAdapter, ProviderId } from '../../../packages/core/src/types.ts';
 import { runAgentProcess, AgentExecutionError } from './process.ts';
 
-const INSTRUCTIONS = `You are participating in Round 1 of an independent multi-AI brainstorming session.\nOffer your own thoughtful, specific answer. Include assumptions, opportunities, constraints, and risks. Do not attempt to invent agreement with other models. Do not access external tools or modify files.\n\nUSER IDEA:\n`;
-
 /** Antigravity (`agy`) print mode only reads stdin as stream-json, one NDJSON user message per turn. */
 export function encodeAntigravityInput(text: string): string {
   return JSON.stringify({ event: 'user', message: { content: text } }) + '\n';
@@ -61,7 +59,7 @@ export function createAdapters(timeoutMs = 90000): Map<string, AgentAdapter> {
   return new Map(Object.entries(specifications).map(([id, { encodeStdin, ...spec }]) => [id, {
     id: id as ProviderId,
     async propose(prompt: string): Promise<string> {
-      const text = INSTRUCTIONS + prompt;
+      const text = prompt;
       const raw = await runAgentProcess({ ...spec, stdin: encodeStdin ? encodeStdin(text) : text, timeoutMs });
       return extractResponse(id as ProviderId, raw);
     },

@@ -45,7 +45,7 @@ The response includes a run ID, timestamps, per-provider responses or sanitized 
 
 ## Security limitations (M1)
 
-- Local development only: **do not expose the unauthenticated API to the internet**.
+- Local development only: **do not expose the unauthenticated API to the internet**. The remote frontend command has been disabled because Vite's /api proxy could otherwise make local endpoints accessible over the network.
 - CLI processes are launched without a shell from empty temporary directories; prompts are piped over stdin.
 - Codex is requested to run with a read-only sandbox, Claude built-in/MCP tools are disabled, and Gemini runs through Antigravity in plan mode with its terminal sandbox enabled.
 - These settings are **not a hardened isolation boundary**: local CLI extensions, hooks and user configuration can still introduce side effects. Do not run untrusted CLI configurations. Do not give sensitive ideas to untrusted providers.
