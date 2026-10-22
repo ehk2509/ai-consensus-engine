@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runAgentProcess, AgentExecutionError } from '../apps/api/src/process.ts';
-import { extractResponse } from '../apps/api/src/providers.ts';
+import { encodeAntigravityInput, extractResponse } from '../apps/api/src/providers.ts';
 
 const node = process.execPath;
 
@@ -26,7 +26,15 @@ test('rejects excessive output instead of collecting unbounded data', async () =
 test('parses provider output without accepting CLI error objects', () => {
   assert.equal(extractResponse('codex', '  proposal  '), '  proposal  ');
   assert.equal(extractResponse('claude', JSON.stringify({ result: 'a response' })), 'a response');
-  assert.equal(extractResponse('gemini', JSON.stringify({ response: 'another response' })), 'another response');
-  assert.throws(() => extractResponse('gemini', JSON.stringify({ error: { code: 403 } })), AgentExecutionError);
+  const agy = (result: object) => [{ event: 'init' }, { event: 'step_update' }, { event: 'result', result }].map((e) => JSON.stringify(e)).join('\n');
+  assert.equal(extractResponse('gemini', agy({ status: 'SUCCESS', response: 'another response\n' })), 'another response');
+  assert.throws(() => extractResponse('gemini', agy({ status: 'ERROR', response: '', error: 'not logged in' })), AgentExecutionError);
+  assert.throws(() => extractResponse('gemini', JSON.stringify({ event: 'init' })), AgentExecutionError);
   assert.throws(() => extractResponse('claude', 'not json'), AgentExecutionError);
+});
+
+test('encodes Antigravity stdin as a single stream-json user message', () => {
+  const encoded = encodeAntigravityInput('line one\nline "two"');
+  assert.equal(encoded.trimEnd().split('\n').length, 1);
+  assert.deepEqual(JSON.parse(encoded), { event: 'user', message: { content: 'line one\nline "two"' } });
 });

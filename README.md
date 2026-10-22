@@ -2,13 +2,13 @@
 
 **One idea. Multiple intelligences. A better-informed decision.**
 
-A local-first multi-AI brainstorming application that gathers independently reasoned proposals from OpenAI Codex, Claude Code, and Gemini CLI.
+A local-first multi-AI brainstorming application that gathers independently reasoned proposals from OpenAI Codex, Claude Code, and Gemini (via the Antigravity CLI).
 
 > **Current milestone: M1 foundation.** Independent proposals only. Cross-review, rebuttals, voting and consensus are **not yet implemented**.
 
 ## Setup
 
-Requires **Node.js 22.12+** plus the CLIs you plan to use. Install and authenticate **codex**, **claude**, and **gemini** using each provider's official instructions. Existing consumer subscriptions do not necessarily include separate API access. Each CLI uses its own local authentication state and usage limits.
+Requires **Node.js 22.12+** plus the CLIs you plan to use. Install and authenticate **codex**, **claude**, and **agy** (Antigravity CLI) using each provider's official instructions. Gemini CLI no longer supports Google OAuth login, so Gemini is reached through Antigravity: run `agy` once interactively to sign in. Existing consumer subscriptions do not necessarily include separate API access. Each CLI uses its own local authentication state and usage limits.
 
 1. Install dependencies: `npm install`
 2. Launch the UI and local API: `npm run dev`
@@ -47,7 +47,7 @@ The response includes a run ID, timestamps, per-provider responses or sanitized 
 
 - Local development only: **do not expose the unauthenticated API to the internet**.
 - CLI processes are launched without a shell from empty temporary directories; prompts are piped over stdin.
-- Codex is requested to run with a read-only sandbox, Claude built-in/MCP tools are disabled, and Gemini is instructed not to use tools in default approval mode.
+- Codex is requested to run with a read-only sandbox, Claude built-in/MCP tools are disabled, and Gemini runs through Antigravity in plan mode with its terminal sandbox enabled.
 - These settings are **not a hardened isolation boundary**: local CLI extensions, hooks and user configuration can still introduce side effects. Do not run untrusted CLI configurations. Do not give sensitive ideas to untrusted providers.
 - The app does not request, copy or store CLI account tokens. Providers can still consume subscription quotas or incur charges.
 - Individual provider failures and timeouts are returned as sanitized errors, not raw stderr.

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import type { BrainstormResult, ProviderId } from '../../../packages/core/src/types.ts';
 
-const providerLabels: Record<ProviderId, string> = { codex: 'Codex · OpenAI', claude: 'Claude Code', gemini: 'Gemini CLI' };
+const providerLabels: Record<ProviderId, string> = { codex: 'Codex · OpenAI', claude: 'Claude Code', gemini: 'Gemini · Antigravity' };
 const options: ProviderId[] = ['codex', 'claude', 'gemini'];
 const selected = ref<ProviderId[]>([...options]);
 const prompt = ref('');
