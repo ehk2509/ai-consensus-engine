@@ -9,7 +9,7 @@ type Mode = 'debate' | 'independent';
 type SessionSummary = { id: string; prompt: string; providers: ProviderId[]; maxRounds: number; createdAt: string; updatedAt: string; status: DebateStatus; round: number };
 const labels: Record<ProviderId, string> = { codex: 'Codex · OpenAI', claude: 'Claude Code', gemini: 'Gemini · Antigravity' };
 const phases: DebatePhase[] = ['proposal', 'critique', 'rebuttal', 'revision'];
-const phaseTitles: Record<DebatePhase, string> = { proposal: 'Independent proposals', critique: 'Peer critiques', rebuttal: 'Rebuttals', revision: 'Revised proposals', synthesis: 'Shared draft', vote: 'Independent voting' };
+const phaseTitles: Record<DebatePhase, string> = { proposal: 'Independent proposals', critique: 'Peer critiques', rebuttal: 'Rebuttals', revision: 'Revised proposals', synthesis: 'Shared draft', vote: 'Independent voting', clarification: 'Ballot clarification', resolution: 'Objection sign-off' };
 const options: ProviderId[] = ['codex', 'claude', 'gemini'];
 const selected = ref<ProviderId[]>([...options]);
 const mode = ref<Mode>('debate');
@@ -47,6 +47,7 @@ const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry)
 const completed = computed(() => Boolean(debate.value && !['queued', 'running'].includes(debate.value.status)));
 const completedCount = computed(() => debate.value?.entries.filter((entry) => entry.status === 'fulfilled').length ?? 0);
 const estimatedCalls = computed(() => selected.value.length + maxRounds.value * (selected.value.length * (selected.value.length - 1) + 2 * selected.value.length) + (consensusEnabled.value ? selected.value.length + 1 : 0));
+const maximumFollowupCalls = computed(() => consensusEnabled.value ? selected.value.length * 2 : 0);
 
 function markdown(content: string): string {
   return DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
@@ -224,7 +225,7 @@ onBeforeUnmount(closeStream);
             </label>
             <label class="consensus-toggle"><input v-model="blockCritical" type="checkbox" :disabled="pending" /> Block unresolved critical objections</label>
           </div>
-          <p class="muted">Approximate maximum: {{ estimatedCalls }} model calls. Later revision rounds can take up to 4 minutes per provider call (within the overall time cap). A 3-round run may need 30 minutes. Voting never implies facts have been verified.</p>
+          <p class="muted">Approximate maximum: {{ estimatedCalls }} model calls. Later revision rounds can take up to 4 minutes per provider call (within the overall time cap). A 3-round run may need 30 minutes. Consensus may optionally use up to {{ maximumFollowupCalls }} additional budgeted calls for ballot clarification and original-author objection sign-off. Voting never implies facts have been verified.</p>
           <p v-if="estimatedCalls > maxCalls" class="warning" role="status">The configured {{ maxCalls }}-call budget may prevent consensus voting. Reduce rounds or turn off voting.</p>
         </div>
         <div class="row footer-row"><span class="muted">Local accounts · Traceable objections, independent votes, no forced agreement.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
@@ -266,7 +267,7 @@ onBeforeUnmount(closeStream);
             <div class="section-top"><h2>Tracked objections</h2><span>{{ debate.objections.length }} records</span></div>
             <article v-for="objection in debate.objections" :key="objection.id" class="objection-item">
               <div class="row"><strong>{{ objection.claim }}</strong><span class="pill" :class="objection.resolution === 'accepted' || objection.resolution === 'partially_accepted' ? 'fulfilled' : 'working'">{{ objection.resolution }}</span></div>
-              <p class="muted">Round {{ objection.round }} · {{ labels[objection.author] }} → {{ labels[objection.target] }} · Severity: {{ objection.severity }}</p>
+              <p class="muted">Round {{ objection.round }} · {{ labels[objection.author] }} → {{ labels[objection.target] }} · Severity: {{ objection.severity }} · {{ objection.kind === 'parsing_failure' ? 'Parsing/evidence failure' : 'Substantive objection' }}</p>
               <p>{{ objection.criticism }}</p>
               <p v-if="objection.response"><strong>Rebuttal:</strong> {{ objection.response }}</p>
               <p class="muted">Author sign-off: {{ objection.authorStatus ?? 'open' }}<span v-if="objection.supersededBy"> · Superseded by {{ objection.supersededBy }}</span></p>
@@ -280,6 +281,9 @@ onBeforeUnmount(closeStream);
             <p class="muted">{{ debate.consensus.reason || 'The council is evaluating the shared draft.' }}</p>
             <p class="muted">Consensus records model judgments, not externally verified facts. The facilitator's self-authored vote is identified and cannot alone satisfy the non-author acceptance requirement.</p>
             <p class="muted">Quorum: {{ debate.consensus.policy.quorum.replace('_', '-') }} · Critical objection gate: {{ debate.consensus.policy.blockCritical ? 'Enabled' : 'Disabled' }} · {{ debate.consensus.votes.length }} ballots</p>
+            <p v-if="debate.consensus.contextOmittedCriticalIds?.length" class="warning">{{ debate.consensus.contextOmittedCriticalIds.length }} critical objections could not fit into model context. Consensus cannot be verified.</p>
+            <p v-if="debate.consensus.status === 'blocked_by_unparseable_evidence'" class="warning">Parsing/incomplete-source evidence prevents final consensus. This is not the same as a substantive disagreement.</p>
+            <div v-if="debate.consensus.clarificationAttempts?.length || debate.consensus.resolutionAttempts?.length" class="resolution-audit"><strong>Final reconciliation audit</strong><p class="muted">Clarifications: {{ debate.consensus.clarificationAttempts?.length ?? 0 }} · Original-author sign-off attempts: {{ debate.consensus.resolutionAttempts?.length ?? 0 }} · All follow-up calls count toward the session budget.</p><details v-for="(attempt, i) in debate.consensus.resolutionAttempts ?? []" :key="i"><summary>{{ labels[attempt.provider] }} · {{ attempt.decisions.length }}/{{ attempt.objectionIds.length }} objections answered</summary><p v-if="attempt.error" class="warning">{{ attempt.error }}</p><p v-for="item in attempt.decisions" :key="item.objectionId" class="muted">{{ item.objectionId }} · {{ item.resolved ? 'Resolved by author' : 'Still open' }}: {{ item.reason }}</p></details></div>
             <div v-if="debate.consensus.draft" class="draft-wrap">
               <div class="row"><strong>Frozen shared proposal</strong><span class="muted">Facilitator: {{ labels[debate.consensus.draft.author] }}</span></div>
               <p class="muted">Draft SHA-256: <code>{{ debate.consensus.draft.sha256 ?? 'unavailable' }}</code> · Model: {{ debate.consensus.draft.provenance?.model ?? 'unreported' }} · Local CLI adapter</p>
@@ -295,8 +299,8 @@ onBeforeUnmount(closeStream);
               </article>
             </div>
             <div v-if="debate.consensus.unresolvedCriticalObjectionIds?.length" class="warning">
-              {{ debate.consensus.unresolvedCriticalObjectionIds.length }} unresolved high-severity or unstructured objections across debate rounds.
-              {{ debate.consensus.policy.blockCritical ? 'These currently block consensus.' : 'The gate is disabled: these are recorded but do not block the configured vote.' }}
+              {{ debate.consensus.unresolvedCriticalObjectionIds.length }} unresolved high-severity or unparseable objections across debate rounds.
+              {{ debate.consensus.policy.blockCritical ? 'These currently block consensus when enough ballots accept.' : 'The gate is disabled: these are recorded but do not block the configured vote.' }}
             </div>
             <div v-if="debate.consensus.draft?.evidence.length" class="evidence-register">
               <h3>Evidence register — not independently verified</h3>

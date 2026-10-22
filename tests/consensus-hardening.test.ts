@@ -91,7 +91,7 @@ test('supersession needs original-author signoff and references a newer objectio
 test('malformed nonempty objection arrays are never silently interpreted as no concerns', async () => {
   const session = await run({}, (id, prompt) =>
     prompt.includes('Stage: CRITIQUE') ? JSON.stringify({ objections: [{ claim: 'Security issue' }] }) : standard(id, prompt));
-  assert.equal(session.consensus?.status, 'blocked');
+  assert.equal(session.consensus?.status, 'blocked_by_unparseable_evidence');
   assert.equal(session.consensus?.unresolvedCriticalObjectionIds.length, 6);
   assert.ok(session.objections.every(o => o.severity === 'unspecified' && o.claim.includes('Malformed')));
 });
