@@ -281,6 +281,11 @@ export async function executeConsensus(
   const participants = session.request.providers;
   // A report must exist for ALL terminal outcomes, including not assessed, invalid draft, timeout and cancellation.
   try {
+    if (signal.aborted) {
+      state.status = 'incomplete';
+      state.reason = 'Session cancelled or timed out before a full independent consensus vote could be taken.';
+      return;
+    }
     if (session.debateStatus !== 'completed' || participants.some((p) => !latestRevision(session, p))) {
       state.status = 'not_assessed';
       state.reason = 'Debate was incomplete or a selected provider lacked a successful final revision.';

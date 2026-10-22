@@ -320,7 +320,7 @@ export async function executeDebate(
     session.error = 'Debate could not complete. Check server logs and local storage.';
   }
   session.debateStatus = session.status;
-  if (session.request.consensus && !signal.aborted) {
+  if (session.request.consensus) {
     try {
       // Keep the SSE stream alive until final M3 voting and reporting finish.
       session.status = 'running';

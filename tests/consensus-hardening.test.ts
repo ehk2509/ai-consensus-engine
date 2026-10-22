@@ -185,3 +185,17 @@ test('transient persistence failure during the vote still produces an incomplete
   assert.equal(session.consensus?.status, 'incomplete');
   assert.match(session.consensus?.reportMarkdown ?? '', /incomplete/i);
 });
+
+test('cancelling during M2 produces a recorded, downloadable-eligible M3 incomplete report without extra calls', async () => {
+  const controller = new AbortController();
+  const session = createDebateSession(validateDebateRequest({ ...base }));
+  await executeDebate(session, agents((id, prompt) => {
+    if (prompt.includes('Stage: INDEPENDENT PROPOSAL')) controller.abort();
+    return standard(id, prompt);
+  }), async () => {}, controller.signal);
+  assert.equal(session.status, 'cancelled');
+  assert.equal(session.consensus?.status, 'incomplete');
+  assert.ok(session.consensus?.reportMarkdown?.includes('cancelled or timed out'));
+  assert.equal(session.consensus?.votes.length, 0);
+  assert.ok(session.calls <= 3);
+});
