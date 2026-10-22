@@ -231,7 +231,8 @@ onBeforeUnmount(closeStream);
           <div class="section-top"><h2>Debate timeline</h2><span>{{ debate.id.slice(0, 8) }} · {{ debate.status.toUpperCase() }}</span></div>
           <div class="panel status-panel">
             <div class="row"><strong>{{ completed ? 'Session finished' : 'Council deliberating' }}</strong><span class="pill" :class="debate.status === 'completed' ? 'fulfilled' : debate.status === 'running' ? 'working' : 'rejected'">{{ debate.status.toUpperCase() }}</span></div>
-            <p class="muted">Round {{ debate.round }} / {{ debate.request.maxRounds }} · {{ completedCount }} successful steps · {{ debate.entries.length }} recorded steps · {{ debate.calls ?? 0 }}/{{ debate.request.maxCalls ?? 40 }} calls</p>
+            <p class="muted">Round {{ debate.round }} / {{ debate.request.maxRounds }} · {{ completedCount }} successful debate steps · {{ debate.calls ?? 0 }}/{{ debate.request.maxCalls ?? 40 }} calls</p>
+            <p class="muted">Debate result: <strong>{{ debate.debateStatus ?? (completed ? debate.status : 'running') }}</strong> · Consensus: <strong>{{ debate.consensus?.status ?? 'not requested' }}</strong></p>
             <div class="progress-track"><div class="progress-fill" :style="{ width: (completed ? 100 : Math.min(99, (debate.events.filter((event) => event.type === 'stage').length / (1 + debate.request.maxRounds * 3 + (debate.request.consensus ? 2 : 0))) * 100)) + '%' }" /></div>
             <p v-if="debate.phase" class="current-step">Current stage: {{ phaseTitles[debate.phase] }}</p>
             <p v-if="debate.error" class="warning">{{ debate.error }}</p>
@@ -263,6 +264,7 @@ onBeforeUnmount(closeStream);
               <p class="muted">Round {{ objection.round }} · {{ labels[objection.author] }} → {{ labels[objection.target] }} · Severity: {{ objection.severity }}</p>
               <p>{{ objection.criticism }}</p>
               <p v-if="objection.response"><strong>Rebuttal:</strong> {{ objection.response }}</p>
+              <p class="muted">Author sign-off: {{ objection.authorStatus ?? 'open' }}<span v-if="objection.supersededBy"> · Superseded by {{ objection.supersededBy }}</span></p>
             </article>
           </section>
           <section v-if="debate.consensus" class="panel consensus-report">
@@ -271,9 +273,11 @@ onBeforeUnmount(closeStream);
               <span class="pill" :class="['unanimous', 'qualified'].includes(debate.consensus.status) ? 'fulfilled' : 'working'">{{ debate.consensus.status.replaceAll('_', ' ') }}</span>
             </div>
             <p class="muted">{{ debate.consensus.reason || 'The council is evaluating the shared draft.' }}</p>
+            <p class="muted">Consensus records model judgments, not externally verified facts. The facilitator's self-authored vote is identified and cannot alone satisfy the non-author acceptance requirement.</p>
             <p class="muted">Quorum: {{ debate.consensus.policy.quorum.replace('_', '-') }} · Critical objection gate: {{ debate.consensus.policy.blockCritical ? 'Enabled' : 'Disabled' }} · {{ debate.consensus.votes.length }} ballots</p>
             <div v-if="debate.consensus.draft" class="draft-wrap">
               <div class="row"><strong>Frozen shared proposal</strong><span class="muted">Facilitator: {{ labels[debate.consensus.draft.author] }}</span></div>
+              <p class="muted">Draft SHA-256: <code>{{ debate.consensus.draft.sha256 ?? 'unavailable' }}</code> · Model: {{ debate.consensus.draft.provenance?.model ?? 'unreported' }} · Local CLI adapter</p>
               <div class="markdown response" v-html="markdown(debate.consensus.draft.proposal)" />
             </div>
             <div v-if="debate.consensus.votes.length" class="voting-grid">
@@ -281,10 +285,14 @@ onBeforeUnmount(closeStream);
                 <div class="row"><strong>{{ labels[vote.provider] }}</strong><span class="pill" :class="vote.verdict === 'accept' ? 'fulfilled' : 'working'">{{ vote.verdict || 'invalid vote' }}</span></div>
                 <p>{{ vote.rationale || vote.error }}</p>
                 <p v-if="vote.concerns.length" class="muted">Concerns: {{ vote.concerns.join('; ') }}</p>
-                <p class="muted">{{ vote.resolvedObjectionIds.length }} objections independently signed off</p>
+                <p class="muted">{{ vote.resolvedObjectionIds.length }} objections independently signed off · {{ vote.authoredDraft ? 'Draft author voting' : 'Non-author voting' }}</p>
+                <details v-if="vote.rawResponse" class="vote-audit"><summary>Audit: raw ballot and provenance</summary><pre>{{ vote.rawResponse }}</pre><p class="muted">Model: {{ vote.provenance?.model ?? 'unreported' }} · Prompt hash: {{ vote.provenance?.promptSha256 ?? 'unavailable' }}</p></details>
               </article>
             </div>
-            <div v-if="debate.consensus.blockingObjectionIds.length" class="warning">{{ debate.consensus.blockingObjectionIds.length }} unresolved critical objections block consensus under this policy.</div>
+            <div v-if="debate.consensus.unresolvedCriticalObjectionIds?.length" class="warning">
+              {{ debate.consensus.unresolvedCriticalObjectionIds.length }} unresolved high-severity or unstructured objections across debate rounds.
+              {{ debate.consensus.policy.blockCritical ? 'These currently block consensus.' : 'The gate is disabled: these are recorded but do not block the configured vote.' }}
+            </div>
             <div v-if="debate.consensus.draft?.evidence.length" class="evidence-register">
               <h3>Evidence register — not independently verified</h3>
               <div v-for="evidence in debate.consensus.draft.evidence" :key="evidence.id" class="evidence-item"><strong>{{ evidence.id }}</strong> {{ evidence.claim }} <span class="muted">{{ evidence.source ? 'Reported source: ' + evidence.source : 'No source provided' }}</span></div>

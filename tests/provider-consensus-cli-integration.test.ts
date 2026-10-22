@@ -30,7 +30,7 @@ process.stdin.on('end', () => {
     evidence: [{ claim: 'Demand estimate from the founder' }],
   });
   else if (message.includes('Stage: INDEPENDENT CONSENSUS VOTE')) response = JSON.stringify({
-    verdict: 'accept', rationale: 'Agreed to run a controlled pilot', concerns: [], resolvedObjectionIds: [],
+    verdict: 'accept', rationale: 'Agreed to run a controlled pilot', concerns: [], resolvedObjectionIds: [], supersessions: [],
   });
   else response = 'Detailed initial or revised proposal from ' + provider;
   if (provider === 'claude') console.log(JSON.stringify({ result: response }));

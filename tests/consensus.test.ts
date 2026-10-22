@@ -29,7 +29,7 @@ function answer(id: ProviderId, prompt: string, options: {
   if (prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')) {
     return JSON.stringify(options.vote ? options.vote(id, prompt) : {
       verdict: 'accept', rationale: 'The draft is appropriately specific.', concerns: [],
-      resolvedObjectionIds: [],
+      resolvedObjectionIds: [], supersessions: [],
     });
   }
   return 'Structured independent response from ' + id;
@@ -61,7 +61,7 @@ test('three accepted votes produce unanimous outcome with evidence clearly unver
 
 test('a conditional ballot cannot produce unanimity; two-thirds explicitly remains qualified', async () => {
   const vote = (id: ProviderId) => ({ verdict: id === 'gemini' ? 'conditional' : 'accept',
-    rationale: 'Independent judgment', concerns: id === 'gemini' ? ['Privacy unresolved'] : [], resolvedObjectionIds: [] });
+    rationale: 'Independent judgment', concerns: id === 'gemini' ? ['Privacy unresolved'] : [], resolvedObjectionIds: [], supersessions: [] });
   const unanimous = (await evaluate({}, { vote })).session;
   assert.equal(unanimous.consensus?.status, 'disputed');
   const majority = (await evaluate({ quorum: 'two_thirds' }, { vote })).session;
@@ -75,7 +75,7 @@ test('critical objections block a unanimous vote unless their authors explicitly
   assert.equal(blocked.consensus?.blockingObjectionIds.length, 6);
   const signed = (await evaluate({}, { objection: true, vote: (_id, prompt) => ({
     verdict: 'accept', rationale: 'The draft now resolves my issues', concerns: [],
-    resolvedObjectionIds: [...prompt.matchAll(/"id":"([0-9a-f-]{36})"/g)].map(m => m[1]),
+    resolvedObjectionIds: [...prompt.matchAll(/"id":"([0-9a-f-]{36})"/g)].map(m => m[1]), supersessions: [],
   }) })).session;
   assert.equal(signed.consensus?.status, 'unanimous');
   assert.equal(signed.consensus?.blockingObjectionIds.length, 0);
@@ -84,7 +84,7 @@ test('critical objections block a unanimous vote unless their authors explicitly
 test('non-author objection IDs are ignored and cannot defeat the critical gate', async () => {
   const session = (await evaluate({}, { objection: true, vote: (_id, prompt) => ({
     verdict: 'accept', rationale: 'Looks good', concerns: [],
-    resolvedObjectionIds: [...prompt.matchAll(/"id":"([0-9a-f-]{36})"/g)].map(m => m[1]).concat('unrecognized-id'),
+    resolvedObjectionIds: [...prompt.matchAll(/"id":"([0-9a-f-]{36})"/g)].map(m => m[1]).concat('unrecognized-id'), supersessions: [],
   }) })).session;
   assert.ok(session.consensus?.votes.every((v) => v.resolvedObjectionIds.every((id) =>
     session.objections.some((o) => o.id === id && o.author === v.provider))));
@@ -93,7 +93,7 @@ test('non-author objection IDs are ignored and cannot defeat the critical gate',
 test('missing or malformed vote is not silently treated as abstention or acceptance', async () => {
   const session = (await evaluate({}, { vote: (id) => id === 'gemini'
     ? { verdict: 'accept' }
-    : { verdict: 'accept', rationale: 'Works', concerns: [], resolvedObjectionIds: [] } })).session;
+    : { verdict: 'accept', rationale: 'Works', concerns: [], resolvedObjectionIds: [], supersessions: [] } })).session;
   assert.equal(session.consensus?.status, 'incomplete');
   assert.equal(session.consensus?.votes.find((v) => v.provider === 'gemini')?.status, 'rejected');
 });

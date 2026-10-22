@@ -58,13 +58,15 @@ Poll `GET /api/debates/<returned id>`, or subscribe to the SSE endpoint and refe
 
 ## M3 voting, safety and consensus rules
 
-Turn on **Generate independent consensus votes** (enabled by default in the Vue interface). The `POST /api/debates` API keeps backwards-compatible M2 behavior unless `"consensus":true` is supplied. Set `"quorum":"unanimous"` (default) or `"quorum":"two_thirds"`, and `"blockCritical":true` (default). Each complete debate generates one frozen shared draft, then every selected model independently votes `accept`, `conditional`, or `reject`. Only `accept` counts toward quorum, and missing or malformed votes yield `incomplete`, never consensus.
+Turn on **Generate independent consensus votes** (enabled by default in the Vue interface). The `POST /api/debates` API keeps backwards-compatible M2 behavior unless `"consensus":true` is supplied. Set `"quorum":"unanimous"` (default) or `"quorum":"two_thirds"`, and `"blockCritical":true` (default). Each complete debate generates one frozen shared draft, then every selected model independently votes `accept`, `conditional`, or `reject`. Only strict `accept` ballots with empty concerns, valid structured fields, and no contradictions count toward quorum. Missing or malformed votes yield `incomplete`, never consensus. The synthesis facilitator rotates by session and its self-authored acceptance **cannot substitute for sufficient independent non-author acceptance**; the self-authored vote is labeled in the report.
 
-With the critical gate enabled, high-severity and unstructured objections from the **last debate round** must be explicitly signed off by their original authors in their independent accept ballots; a target model's self-reported rebuttal is not proof of resolution. Outcomes are `unanimous`, `qualified`, `disputed`, `blocked`, `incomplete` or `not_assessed`. All dissent and objection IDs remain visible.
+High-severity and unstructured objections from **every debate round** remain open until their original authors confirm resolution in a valid accept ballot or explicitly supersede them with a newer authored objection. A target model's self-reported rebuttal is not proof of resolution. A malformed nonempty critique list becomes an unresolved objection instead of disappearing. With the critical gate disabled, unresolved concerns remain visible and downloadable but do not block the selected voting policy. Outcomes are `unanimous`, `qualified`, `disputed`, `blocked`, `incomplete` or `not_assessed`. All dissent and objection IDs remain visible.
 
 With three models and one round, voting takes **19 calls** total (15 debate + 1 draft + 3 ballots). With three rounds, M2 alone may reach 39 calls, exceeding the 40-call cap once consensus is included. In that case M3 is `not_assessed`. Reduce rounds, choose fewer models, or keep M3 off; the product never silently increases the session's call budget.
 
-Evidence claims in a generated draft are recorded as **unverified**. The app does not independently browse, validate references or treat multiple-model agreement as factual truth. The final Markdown report is assembled deterministically from the frozen proposal, recorded ballots and blockers, and can be retrieved via `GET /api/debates/:id/report` (409 if unavailable).
+Every session keeps separate `debateStatus`, live execution `status` and `consensus.status` fields. The session JSON also retains bounded raw model ballots and facilitator output, SHA-256 hashes of the frozen draft and prompts, and provenance `model:unreported` when the CLI does not expose a trustworthy model label. These are **local plaintext records**, so protect the data folder.
+
+Evidence claims in a generated draft are recorded as **unverified**. The app does not independently browse, validate references or treat multiple-model agreement as factual truth. A final Markdown decision record is created for **every consensus attempt**, including missing votes, invalid drafts, cancellation, and insufficient budget. The report records unresolved critical concerns, gate policy, facilitator self-vote and dissent; downloadable from `GET /api/debates/:id/report` (409 if unavailable).
 
 ## Data and restart behavior
 
@@ -120,3 +122,7 @@ ACE_LIVE_SMOKE=I_ACCEPT_MODEL_USAGE npm run smoke:consensus
 ```
 
 CI uses deterministic stub models and CLI-process integration tests; it cannot verify your personal authenticated CLI accounts. Check session outcome, votes, objections and report after the live smoke.
+
+## M3 correctness regression coverage
+
+CI exercises persistent objections from prior rounds, malformed critique inputs, contradictory accept votes, missing ballot fields, author-confirmed resolutions and supersessions, non-author voting thresholds, disabled critical gate behavior, timeout/cancellation, persistence failure recovery, provenance, audit hashes, and failure reports. Tests use provider mocks; the authenticated live CLI flow must still be verified locally before merge.

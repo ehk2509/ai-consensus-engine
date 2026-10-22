@@ -19,7 +19,7 @@ test('API exposes a persistent M3 decision report only after valid voting', asyn
       assumptions: ['Pilot customers are available'], evidence: [],
     });
     if (prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')) return JSON.stringify({
-      verdict: 'accept', rationale: 'Ready for a controlled pilot', concerns: [], resolvedObjectionIds: [],
+      verdict: 'accept', rationale: 'Ready for a controlled pilot', concerns: [], resolvedObjectionIds: [], supersessions: [],
     });
     return 'A valid proposal from ' + id;
   } }]));
