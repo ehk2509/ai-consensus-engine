@@ -8,7 +8,8 @@ const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 export class DebateStore {
   private writes = new Map<string, Promise<void>>();
   private active = new Set<string>();
-  constructor(private readonly directory = resolve(process.cwd(), '.ace-data', 'debates')) {}
+  private readonly directory: string;
+  constructor(directory = resolve(process.cwd(), '.ace-data', 'debates')) { this.directory = resolve(directory); }
   activate(id: string) { this.active.add(id); }
   deactivate(id: string) { this.active.delete(id); }
   private filename(id: string) {

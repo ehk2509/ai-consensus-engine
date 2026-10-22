@@ -45,7 +45,7 @@ export function validateDebateRequest(value: unknown): DebateRequest {
   if (base.providers.length < 2) throw new Error('Select at least two providers for a debate.');
   const obj = value as Record<string, unknown>;
   const maxRounds = obj.maxRounds === undefined ? 1 : obj.maxRounds;
-  if (!Number.isInteger(maxRounds) || typeof maxRounds !== 'number' || maxRounds < 1 || maxRounds > 3) {
+  if (typeof maxRounds !== 'number' || !Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 3) {
     throw new Error('maxRounds must be an integer between 1 and 3.');
   }
   return { ...base, maxRounds };
