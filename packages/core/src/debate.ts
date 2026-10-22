@@ -246,8 +246,8 @@ export async function executeDebate(
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, session.request.maxDurationMs ?? 900000);
   const signal = controller.signal;
   session.status = 'running';
-  await notify(session, publisher, { type: 'started' });
   try {
+    await notify(session, publisher, { type: 'started' });
     await stage(session, publisher, 'proposal', 0, async () => {
       await Promise.all(session.request.providers.map((provider) =>
         perform(session, adapters, publisher, 'proposal', 0, provider, promptForProposal(session), undefined, signal)));
