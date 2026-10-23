@@ -37,6 +37,7 @@ const accessToken = ref('');
 const authError = ref('');
 const resumeConfirm = ref(false);
 const retrySelected = ref<string[]>([]);
+watch(() => debate.value?.id, () => { retrySelected.value = []; resumeConfirm.value = false; });
 const connection = ref('');
 const detected = ref<Partial<Record<ProviderId, boolean>>>({});
 const activeProposal = ref<ProviderId | null>(null);

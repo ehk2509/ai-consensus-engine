@@ -137,9 +137,11 @@ export class DurableDebateWorker {
         !consensus.negotiationHistory?.length) {
       return conflict('Legacy consensus has no call journal. Its in-flight provider calls cannot be reconstructed safely.');
     }
-    if (consensus?.negotiationHistory?.some(c => c.outcome === 'running' || c.outcome === 'interrupted') &&
-        !consensus.negotiationCalls?.length) {
-      return conflict('Negotiation lacks a durable provider-call journal; unsafe to resume.');
+    if (consensus?.negotiationHistory?.some(c =>
+      (c.outcome === 'running' || c.outcome === 'interrupted') &&
+      (c.revisions.length > 0 || !!c.revisedDraftSha256)) &&
+      !consensus.negotiationCalls?.length) {
+      return conflict('Negotiation has progressed but lacks a durable provider-call journal; unsafe to resume.');
     }
     const failedDebate = session.entries.filter(e => (e.status === 'rejected' || e.status === 'skipped') && !e.retryAuthorized);
     const requested = new Set(retryIds);

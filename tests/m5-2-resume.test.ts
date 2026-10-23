@@ -186,3 +186,73 @@ test('M5.2 refuses legacy unjournaled consensus and an expired original deadline
     assert.equal(resp.statusCode,409);assert.match(resp.json().error,/deadline/i);
   });
 });
+
+test('M5.2 replays a persisted full ballot RESPONSE without a second provider call after cold restart',async()=>{
+  const session=await baseline((id,prompt)=>prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')
+    ? JSON.stringify({verdict:'accept',rationale:'Pilot fits the evidence gates.',concerns:[],
+        resolvedObjectionIds:[],supersessions:[]})
+    : respond(id,prompt));
+  assert.equal(session.consensus?.status,'unanimous');
+  const priorCalls=session.calls;
+  const expectedHash=session.consensus!.draft!.sha256;
+  const priorClaude=session.consensus!.callJournal!.find(c=>c.stage==='vote'&&c.provider==='claude');
+  assert.equal(priorClaude?.status,'fulfilled');
+  // Crash boundary: provider output is durably committed, but the parsed vote
+  // and terminal report have not been saved yet.
+  session.consensus!.votes=session.consensus!.votes.filter(v=>v.provider!=='claude');
+  session.consensus!.status='voting';
+  session.status='running';
+  session.finishedAt=undefined;
+  let providerCalls=0;
+  await withServer(session,(_id,prompt)=>{providerCalls++;return respond(_id,prompt);},async(app,store)=>{
+    const current=(await app.inject('/api/debates/'+session.id)).json() as DebateSession;
+    assert.equal(current.status,'interrupted');
+    assert.equal(providerCalls,0);
+    const accepted=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',payload:{}});
+    assert.equal(accepted.statusCode,202);
+    const done=await completed(app,session.id);
+    assert.equal(done.consensus?.status,'unanimous');
+    assert.equal(done.consensus?.draft?.sha256,expectedHash);
+    assert.equal(done.calls,priorCalls);
+    assert.equal(providerCalls,0);
+    assert.equal(done.consensus?.votes.length,3);
+    assert.equal((await store.getPersisted(session.id))?.consensus?.status,'unanimous');
+  });
+});
+test('M5.2 refuses to restart a cold-restart issued ballot until its exact ID is authorized',async()=>{
+  const session=await baseline((id,prompt)=>prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')
+    ? JSON.stringify({verdict:'accept',rationale:'Pilot fits the evidence gates.',concerns:[],
+        resolvedObjectionIds:[],supersessions:[]})
+    : respond(id,prompt));
+  const prior=session.calls;
+  const vote=session.consensus!.callJournal!.find(c=>c.stage==='vote'&&c.provider==='claude')!;
+  vote.status='issued';
+  vote.rawResponse=undefined;
+  session.consensus!.votes=session.consensus!.votes.filter(v=>v.provider!=='claude');
+  session.consensus!.status='voting';
+  session.status='running';
+  session.finishedAt=undefined;
+  let providerCalls=0;
+  await withServer(session,(id,prompt)=>{
+    providerCalls++;
+    return prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')
+      ? JSON.stringify({verdict:'accept',rationale:'Pilot fits the evidence gates.',concerns:[],
+          resolvedObjectionIds:[],supersessions:[]}) : respond(id,prompt);
+  },async(app)=>{
+    await app.inject('/api/health');
+    assert.equal(providerCalls,0);
+    assert.equal((await app.inject('/api/debates/'+session.id)).json().status,'interrupted');
+    const blocked=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',payload:{}});
+    assert.equal(blocked.statusCode,409);
+    assert.deepEqual(blocked.json().uncertainCallIds,[vote.id]);
+    assert.equal(providerCalls,0);
+    const accepted=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',
+      payload:{retryCallIds:[vote.id],acknowledgeMayRepeatCall:true}});
+    assert.equal(accepted.statusCode,202);
+    const done=await completed(app,session.id);
+    assert.equal(done.consensus?.status,'unanimous');
+    assert.equal(done.calls,prior+1);
+    assert.equal(providerCalls,1);
+    assert.ok(done.consensus?.callJournal?.some(c=>c.id===vote.id&&c.retryAuthorized));
+  });
+});
