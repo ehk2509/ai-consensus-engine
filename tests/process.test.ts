@@ -87,3 +87,21 @@ test('nonpositive process timeouts are rejected before spawning a process', asyn
   await assert.rejects(runAgentProcess({ executable: node, args: [], stdin: '', timeoutMs: 0 }),
     (error: unknown) => error instanceof AgentExecutionError && /Invalid provider timeout/.test(error.message));
 });
+
+test('provider subprocess never receives local API access token or token-path settings', async () => {
+  const prior = { ACE_API_TOKEN: process.env.ACE_API_TOKEN, ACE_TOKEN_FILE: process.env.ACE_TOKEN_FILE, ACE_DATA_DIR: process.env.ACE_DATA_DIR };
+  process.env.ACE_API_TOKEN = 'server-only-access-secret';
+  process.env.ACE_TOKEN_FILE = '/sensitive/api-token';
+  process.env.ACE_DATA_DIR = '/sensitive/session-data';
+  try {
+    const output = await runAgentProcess({
+      executable: node, args: ['-e', 'process.stdout.write(JSON.stringify([process.env.ACE_API_TOKEN,process.env.ACE_TOKEN_FILE,process.env.ACE_DATA_DIR]))'],
+      stdin: '', timeoutMs: 5000,
+    });
+    assert.equal(output, '[null,null,null]');
+  } finally {
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});

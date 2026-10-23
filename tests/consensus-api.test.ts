@@ -23,7 +23,7 @@ test('API exposes a persistent M3 decision report only after valid voting', asyn
     });
     return 'A valid proposal from ' + id;
   } }]));
-  const app = makeApp({ adapters, store: new DebateStore(dir) });
+  const app = makeApp({ allowUnauthenticatedForTests: true, adapters, store: new DebateStore(dir) });
   try {
     const invalid = await app.inject({ method: 'POST', url: '/api/debates', payload: {
       prompt: 'Evaluate a product initiative', providers: ids, consensus: true, quorum: 'impossible',
@@ -61,7 +61,7 @@ test('report endpoint refuses non-voted M2 sessions', async () => {
     ['codex', { id: 'codex', propose: async () => 'Response A' }],
     ['claude', { id: 'claude', propose: async () => 'Response B' }],
   ]);
-  const app = makeApp({ adapters, store: new DebateStore(dir) });
+  const app = makeApp({ allowUnauthenticatedForTests: true, adapters, store: new DebateStore(dir) });
   try {
     const started = await app.inject({ method: 'POST', url: '/api/debates', payload: {
       prompt: 'Evaluate a small business initiative', providers: ['codex', 'claude'], maxRounds: 1,

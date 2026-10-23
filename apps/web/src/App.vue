@@ -30,6 +30,11 @@ const result = ref<BrainstormResult | null>(null);
 const debate = ref<DebateSession | null>(null);
 const history = ref<SessionSummary[]>([]);
 const error = ref('');
+const authRequired = ref(false);
+const authenticated = ref(true);
+const accessToken = ref('');
+const authError = ref('');
+const resumeConfirm = ref(false);
 const connection = ref('');
 const detected = ref<Partial<Record<ProviderId, boolean>>>({});
 const activeProposal = ref<ProviderId | null>(null);
@@ -40,7 +45,7 @@ let currentSessionId: string | null = null;
 let requestGeneration = 0;
 
 const valid = computed(() => prompt.value.trim().length >= 10 && prompt.value.length <= 12000 &&
-  selected.value.length >= (mode.value === 'debate' ? 2 : 1));
+  selected.value.length >= (mode.value === 'debate' ? 2 : 1) && authenticated.value);
 const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry) =>
   (visiblePhase.value === 'all' || entry.phase === visiblePhase.value) &&
   (visibleRound.value === -1 || entry.round === visibleRound.value)));
@@ -62,6 +67,57 @@ function stageLabel(entry: DebateEntry): string {
     : labels[entry.provider];
 }
 function closeStream() { stream?.close(); stream = null; }
+async function checkAuth() {
+  try {
+    const response = await fetch('/api/auth/status', { cache: 'no-store' });
+    const state = await response.json() as { required: boolean; authenticated: boolean };
+    authRequired.value = state.required;
+    authenticated.value = state.authenticated;
+  } catch { authError.value = 'Cannot reach the local API.'; }
+}
+async function authenticate() {
+  authError.value = '';
+  try {
+    const response = await fetch('/api/auth/login', { method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: accessToken.value }) });
+    accessToken.value = '';
+    if (!response.ok) throw new Error('Invalid access token.');
+    authenticated.value = true;
+    await refreshHistory();
+    const available = await fetch('/api/providers');
+    if (available.ok) {
+      const data = await available.json() as { providers: Array<{ id: ProviderId; installed: boolean }> };
+      detected.value = Object.fromEntries(data.providers.map(({ id, installed }) => [id, installed]));
+    }
+  } catch (e) { authError.value = e instanceof Error ? e.message : 'Authentication failed.'; }
+}
+const uncertainCalls = computed(() => (debate.value?.entries ?? []).filter(e =>
+  (e.status === 'issued' || e.status === 'uncertain') && !e.retryAuthorized));
+async function resumeInterrupted() {
+  if (!debate.value || pending.value) return;
+  const id = debate.value.id;
+  const hasUncertain = uncertainCalls.value.length > 0;
+  if (hasUncertain && !resumeConfirm.value) {
+    error.value = 'Review the uncertain calls and explicitly acknowledge potential duplicate provider usage before resuming.';
+    return;
+  }
+  error.value = '';
+  try {
+    const response = await fetch('/api/debates/' + encodeURIComponent(id) + '/resume', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ retryCallIds: hasUncertain ? uncertainCalls.value.map(e => e.id) : [],
+        acknowledgeMayRepeatCall: hasUncertain && resumeConfirm.value }),
+    });
+    const data = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(data.error ?? 'Unable to resume this debate.');
+    resumeConfirm.value = false;
+    pending.value = true;
+    await loadSession(id);
+    subscribe(id);
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : 'Resume failed.'; }
+}
+
 async function refreshHistory() {
   try {
     const response = await fetch('/api/debates', { cache: 'no-store' });
@@ -168,6 +224,8 @@ async function submit() {
   }
 }
 onMounted(async () => {
+  await checkAuth();
+  if (!authenticated.value) return;
   void refreshHistory();
   try {
     const response = await fetch('/api/providers');
@@ -181,12 +239,19 @@ onBeforeUnmount(closeStream);
 
 <template>
   <main class="shell">
-    <div class="eyebrow">MULTI-MODEL THINKING STUDIO · M3</div>
+    <div class="eyebrow">MULTI-MODEL THINKING STUDIO · M4</div>
     <header>
       <div><h1>AI Consensus <span>Engine</span></h1><p>One idea. Multiple intelligences. A better-informed decision.</p></div>
       <span class="phase">03 / CONSENSUS COUNCIL</span>
     </header>
-    <div class="app-layout">
+    <section v-if="authRequired && !authenticated" class="panel auth-gate">
+      <h2>Unlock local AI council</h2>
+      <p class="muted">Enter the API access token configured as ACE_API_TOKEN. It is exchanged for a short-lived HttpOnly local cookie and is not stored in the browser.</p>
+      <form @submit.prevent="authenticate"><input v-model="accessToken" type="password" autocomplete="off" placeholder="Access token" aria-label="Local API access token" />
+        <button type="submit" :disabled="accessToken.length < 24">Unlock</button></form>
+      <p v-if="authError" class="warning" role="alert">{{ authError }}</p>
+    </section>
+    <div v-if="authenticated" class="app-layout">
       <div class="workspace">
         <section class="panel compose">
           <div class="section-top"><h2>Start a session</h2><span>Local AI council</span></div>
@@ -232,6 +297,16 @@ onBeforeUnmount(closeStream);
           <p v-if="error" class="error" role="alert">{{ error }}</p>
           <p v-if="connection" class="warning" role="status">{{ connection }}</p>
           <button v-if="pending && debate" class="cancel-action" type="button" @click="cancelDebate">Cancel current debate</button>
+          <div v-if="debate?.status === 'interrupted' && !pending" class="resume-box">
+            <h3>Recover interrupted debate</h3>
+            <p v-if="!uncertainCalls.length" class="muted">Previously completed stages will be reused. Pending safe stages can continue.</p>
+            <template v-else>
+              <p class="warning">{{ uncertainCalls.length }} CLI calls had an unknown outcome at the time of interruption. A retry may consume provider quota twice.</p>
+              <p v-for="call in uncertainCalls" :key="call.id" class="muted">{{ call.provider }} · {{ call.phase }} · {{ call.id }}</p>
+              <label class="consensus-toggle"><input v-model="resumeConfirm" type="checkbox" /> I authorize retrying these exact uncertain calls and accept possible duplicate usage</label>
+            </template>
+            <button type="button" class="download-report" :disabled="uncertainCalls.length > 0 && !resumeConfirm" @click="resumeInterrupted">Resume safely</button>
+          </div>
         </section>
         <section v-if="debate" class="results" aria-live="polite">
           <div class="section-top"><h2>Debate timeline</h2><span>{{ debate.id.slice(0, 8) }} · {{ debate.status.toUpperCase() }}</span></div>

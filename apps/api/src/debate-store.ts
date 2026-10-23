@@ -1,6 +1,7 @@
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { durableReplace } from './durable-json.ts';
+import { acquireLocalWorkerLease } from './worker-lease.ts';
 import type { DebateSession } from '../../../packages/core/src/debate.ts';
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -12,6 +13,11 @@ export class DebateStore {
   constructor(directory = resolve(process.cwd(), '.ace-data', 'debates')) { this.directory = resolve(directory); }
   activate(id: string) { this.active.add(id); }
   deactivate(id: string) { this.active.delete(id); }
+  getDirectory(): string { return this.directory; }
+  /** The kernel lock stays owned by the helper as long as its parent holds stdin. */
+  async acquireWorkerLease(): Promise<() => Promise<void>> {
+    return acquireLocalWorkerLease(this.directory);
+  }
   private filename(id: string) {
     if (!ID_PATTERN.test(id)) throw new Error('Invalid session ID.');
     return join(this.directory, id + '.json');
@@ -21,35 +27,59 @@ export class DebateStore {
     const snapshot = JSON.stringify(session);
     const id = session.id;
     const previous = this.writes.get(id) ?? Promise.resolve();
-    const next = previous.catch(() => { /* A failed write must not poison later snapshots. */ }).then(async () => {
-      await mkdir(this.directory, { recursive: true, mode: 0o700 });
-      const tmp = this.filename(id) + '.' + randomUUID() + '.tmp';
-      try {
-        await writeFile(tmp, snapshot, { encoding: 'utf8', mode: 0o600 });
-        await rename(tmp, this.filename(id));
-      } catch (error) {
-        const { rm } = await import('node:fs/promises');
-        await rm(tmp, { force: true });
-        throw error;
-      }
-    });
+    const next = previous.catch(() => {}).then(() => durableReplace(this.filename(id), snapshot));
     this.writes.set(id, next);
     try { await next; }
     finally { if (this.writes.get(id) === next) this.writes.delete(id); }
   }
-  async get(id: string): Promise<DebateSession | null> {
+  /** Read exactly what was durably committed; do not silently mutate the stored status. */
+  async getPersisted(id: string): Promise<DebateSession | null> {
     if (!ID_PATTERN.test(id)) return null;
     await this.writes.get(id);
-    try {
-      const value = JSON.parse(await readFile(this.filename(id), 'utf8')) as DebateSession;
-      if ((value.status === 'running' || value.status === 'queued') && !this.active.has(id)) {
-        return { ...value, status: 'interrupted', phase: null, error: 'Server stopped before the debate completed. This session is read-only.' };
-      }
-      return value;
-    } catch (error) {
+    try { return JSON.parse(await readFile(this.filename(id), 'utf8')) as DebateSession; }
+    catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
+  }
+  async get(id: string): Promise<DebateSession | null> {
+    const value = await this.getPersisted(id);
+    if (!value) return null;
+    if ((value.status === 'running' || value.status === 'queued') && !this.active.has(id)) {
+      return { ...value, status: 'interrupted', phase: null,
+        error: 'Server stopped before this run completed. Resume is available after verifying uncertain calls.' };
+    }
+    return value;
+  }
+  /** Scan every stored job: historical completed sessions must never hide new queued work. */
+  async listRecoverableQueued(): Promise<DebateSession[]> {
+    let names: string[];
+    try { names = await readdir(this.directory); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const queued: DebateSession[] = [];
+    for (const name of names) {
+      if (!name.endsWith('.json') || !ID_PATTERN.test(name.slice(0, -5))) continue;
+      const session = await this.getPersisted(name.slice(0, -5));
+      if (session?.status === 'queued') queued.push(session);
+    }
+    queued.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return queued;
+  }
+  async listPersisted(limit = 500): Promise<DebateSession[]> {
+    let names: string[];
+    try { names = await readdir(this.directory); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const sessions = await Promise.all(names.filter(name => name.endsWith('.json') && ID_PATTERN.test(name.slice(0, -5)))
+      .map(name => this.getPersisted(name.slice(0, -5))));
+    return sessions.filter((v): v is DebateSession => v !== null)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, Math.max(1, Math.min(1000, limit)));
   }
   async list(limit = 30): Promise<DebateSession[]> {
     let names: string[];

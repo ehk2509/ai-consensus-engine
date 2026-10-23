@@ -41,7 +41,11 @@ export interface DebateEntry {
   round: number;
   provider: ProviderId;
   target?: ProviderId;
-  status: 'fulfilled' | 'rejected' | 'skipped';
+  status: 'fulfilled' | 'rejected' | 'skipped' | 'issued' | 'uncertain';
+  /** Journaled before the external CLI request, preventing implicit replay after crashes. */
+  stepKey?: string;
+  /** A prior uncertain attempt explicitly authorized for replay by the operator. */
+  retryAuthorized?: boolean;
   content?: string;
   error?: string;
   durationMs: number;
@@ -63,6 +67,8 @@ export interface DebateSession {
   createdAt: string;
   updatedAt: string;
   finishedAt?: string;
+  /** Absolute deadline from first execution: includes downtime and manual review. */
+  executionDeadlineAt?: string;
   status: DebateStatus;
   /** Outcome of deliberation, distinct from the M3 council verdict and live execution status. */
   debateStatus?: DebateStatus;
@@ -103,6 +109,12 @@ export function createDebateSession(request: DebateRequest): DebateSession {
 }
 
 export type DebatePublisher = (session: DebateSession) => Promise<void>;
+export function debateStepKey(phase: DebatePhase, round: number, provider: ProviderId, target?: ProviderId): string {
+  return [phase, String(round), provider, target ?? '-'].join(':');
+}
+export function uncertainDebateEntries(session: DebateSession): DebateEntry[] {
+  return session.entries.filter(e => (e.status === 'issued' || e.status === 'uncertain') && !e.retryAuthorized);
+}
 const MAX_STORED_CHARS = 25000;
 const MAX_OBJECTIONS_PER_REVIEW = 32;
 
@@ -238,34 +250,48 @@ async function perform(
   publisher: DebatePublisher, phase: DebatePhase, round: number, provider: ProviderId,
   prompt: string, target?: ProviderId, signal?: AbortSignal, deadlineMs?: number,
 ): Promise<void> {
+  const key = debateStepKey(phase, round, provider, target);
+  // Terminal steps and ambiguous calls must never be silently repeated on resume.
+  // Only an explicit operator-authorized retry can replace a journaled uncertain call.
+  const prior = session.entries.find(e =>
+    (e.stepKey ?? debateStepKey(e.phase, e.round, e.provider, e.target)) === key && !e.retryAuthorized);
+  if (prior) return;
   const start = performance.now();
   const remainingMs = deadlineMs === undefined ? Infinity : deadlineMs - Date.now();
   const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs(phase, round), remainingMs));
-  let entry: DebateEntry;
+  const entry: DebateEntry = {
+    id: randomUUID(), stepKey: key, phase, round, provider, target,
+    status: 'issued', durationMs: 0, timeoutMs, createdAt: new Date().toISOString(),
+  };
   if (signal?.aborted || remainingMs <= 0 || session.calls >= (session.request.maxCalls ?? 40)) {
-    entry = { id: randomUUID(), phase, round, provider, target, status: 'skipped',
-      error: signal?.aborted || remainingMs <= 0 ? 'Execution cancelled or time limit reached.' : 'Session call budget exhausted.',
-      durationMs: 0, timeoutMs, createdAt: new Date().toISOString() };
+    entry.status = 'skipped';
+    entry.error = signal?.aborted || remainingMs <= 0
+      ? 'Execution cancelled or time limit reached.' : 'Session call budget exhausted.';
     session.entries.push(entry);
     await notify(session, publisher, { type: 'entry', phase, round, entryId: entry.id });
     return;
   }
   session.calls += 1;
+  session.entries.push(entry);
+  // Write-ahead intent: if the process dies after this save, the call is uncertain,
+  // never re-run automatically and never counted as a completed model answer.
+  await notify(session, publisher, { type: 'entry', phase, round, entryId: entry.id });
   try {
     const adapter = adapters.get(provider);
     if (!adapter) throw new Error('Missing adapter.');
     const raw = await adapter.propose(prompt, signal, { timeoutMs });
     if (signal?.aborted) throw new Error('Cancelled');
     if (!raw.trim()) throw new Error('Empty response.');
-    entry = { id: randomUUID(), phase, round, provider, target, status: 'fulfilled',
-      content: bounded(raw, MAX_STORED_CHARS), durationMs: Math.round(performance.now() - start), timeoutMs, createdAt: new Date().toISOString() };
+    entry.status = 'fulfilled';
+    entry.content = bounded(raw, MAX_STORED_CHARS);
+    entry.durationMs = Math.round(performance.now() - start);
     captureObjections(session, entry, raw);
     applyRebuttal(session, entry, raw);
   } catch (error) {
-    entry = { id: randomUUID(), phase, round, provider, target, status: 'rejected',
-      error: signal?.aborted ? 'Execution cancelled or time limit reached.' : safeError(error), durationMs: Math.round(performance.now() - start), timeoutMs, createdAt: new Date().toISOString() };
+    entry.status = 'rejected';
+    entry.error = signal?.aborted ? 'Execution cancelled or time limit reached.' : safeError(error);
+    entry.durationMs = Math.round(performance.now() - start);
   }
-  session.entries.push(entry);
   await notify(session, publisher, { type: 'entry', phase, round, entryId: entry.id });
 }
 
@@ -287,14 +313,35 @@ export async function executeDebate(
   session: DebateSession, adapters: ReadonlyMap<string, AgentAdapter>, publisher: DebatePublisher,
   externalSignal?: AbortSignal,
 ): Promise<DebateSession> {
+  for (const entry of session.entries) if (entry.status === 'issued') entry.status = 'uncertain';
+  if (uncertainDebateEntries(session).length) {
+    session.status = 'interrupted';
+    session.error = 'Uncertain external calls require explicit operator review before resuming.';
+    await notify(session, publisher, { type: 'finished' });
+    return session;
+  }
+  // A session gets ONE wall-clock deadline on its first execution. Downtime and
+  // human approval time count toward that deadline (conservative no-extension policy).
+  const firstStart = Date.now();
+  if (!session.executionDeadlineAt) {
+    session.executionDeadlineAt = new Date(firstStart + (session.request.maxDurationMs ?? 900000)).toISOString();
+  }
+  const deadlineMs = Date.parse(session.executionDeadlineAt);
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= firstStart) {
+    session.status = 'budget_exhausted';
+    session.error = 'The original wall-clock deadline expired; resuming cannot extend the time budget.';
+    session.phase = null;
+    session.finishedAt = new Date().toISOString();
+    await notify(session, publisher, { type: 'finished' });
+    return session;
+  }
   const controller = new AbortController();
   let timedOut = false;
   const onCancel = () => controller.abort();
   if (externalSignal?.aborted) controller.abort();
   externalSignal?.addEventListener('abort', onCancel, { once: true });
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, session.request.maxDurationMs ?? 900000);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(1, deadlineMs - Date.now()));
   const signal = controller.signal;
-  const deadlineMs = Date.now() + (session.request.maxDurationMs ?? 900000);
   session.status = 'running';
   try {
     await notify(session, publisher, { type: 'started' });
@@ -320,7 +367,8 @@ export async function executeDebate(
           await Promise.all(participants.map((provider) => {
             const critiques = extract(session, 'critique', round, provider);
             if (critiques.length) return perform(session, adapters, publisher, 'rebuttal', round, provider, promptForRebuttal(session, provider), undefined, signal, deadlineMs);
-            const skipped: DebateEntry = { id: randomUUID(), phase: 'rebuttal', round, provider, status: 'skipped',
+            if (session.entries.some(e => e.phase === 'rebuttal' && e.round === round && e.provider === provider && !e.retryAuthorized)) return;
+            const skipped: DebateEntry = { id: randomUUID(), stepKey: debateStepKey('rebuttal', round, provider), phase: 'rebuttal', round, provider, status: 'skipped',
               durationMs: 0, createdAt: new Date().toISOString(), error: 'No successful incoming critiques.' };
             session.entries.push(skipped);
             return notify(session, publisher, { type: 'entry', phase: 'rebuttal', round, entryId: skipped.id });
@@ -332,7 +380,7 @@ export async function executeDebate(
         });
       }
       session.status = session.entries.some((entry) => entry.status === 'skipped' && entry.error === 'Session call budget exhausted.') ? 'budget_exhausted' :
-        session.entries.some((entry) => entry.status === 'rejected') ? 'partial' : 'completed';
+        session.entries.some((entry) => entry.status === 'rejected' && !entry.retryAuthorized) ? 'partial' : 'completed';
     }
   } catch {
     session.status = 'failed';

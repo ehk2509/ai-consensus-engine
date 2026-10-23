@@ -14,7 +14,7 @@ test('creates asynchronous debates, streams completed state and retrieves histor
     ['codex', { id: 'codex', propose: async () => 'Response A' }],
     ['claude', { id: 'claude', propose: async () => 'Response B' }],
   ]);
-  const app = makeApp({ adapters, store: new DebateStore(dir) });
+  const app = makeApp({ allowUnauthenticatedForTests: true, adapters, store: new DebateStore(dir) });
   try {
     const invalid = await app.inject({ method: 'POST', url: '/api/debates', payload: { prompt: 'short', providers: ['codex'] } });
     assert.equal(invalid.statusCode, 400);
@@ -52,7 +52,7 @@ test('API cancellation stops active debate and records cancelled status', async 
     signal?.addEventListener('abort', () => resolve('Cancelled'), { once: true });
   });
   const adapters = new Map<string, AgentAdapter>([['codex', { id: 'codex', propose: wait }], ['claude', { id: 'claude', propose: wait }]]);
-  const app = makeApp({ adapters, store: new DebateStore(dir) });
+  const app = makeApp({ allowUnauthenticatedForTests: true, adapters, store: new DebateStore(dir) });
   try {
     const created = await app.inject({ method: 'POST', url: '/api/debates', payload: {
       prompt: 'Analyze cancellation of multi-agent deliberation', providers: ['codex', 'claude'], maxRounds: 1,
