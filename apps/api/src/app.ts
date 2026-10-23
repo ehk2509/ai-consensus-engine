@@ -8,13 +8,23 @@ import { createAdapters, probeInstalledClis } from './providers.ts';
 import { DebateStore } from './debate-store.ts';
 import { DurableDebateWorker } from './worker.ts';
 import { installLocalAuth } from './auth.ts';
+import { DailyCallQuota, environmentQuotaLimits } from './quota.ts';
+import type { DailyQuotaLimits } from './quota.ts';
 
-export interface AppOptions { adapters?: Map<string, AgentAdapter>; store?: DebateStore; apiToken?: string; }
+export interface AppOptions { adapters?: Map<string, AgentAdapter>; store?: DebateStore; apiToken?: string; quotaLimits?: DailyQuotaLimits; }
 
 export function makeApp(options: AppOptions = {}) {
   const app = Fastify({ logger: true, bodyLimit: 16 * 1024 });
-  const adapters = options.adapters ?? createAdapters();
+  const baseAdapters = options.adapters ?? createAdapters();
   const store = options.store ?? new DebateStore(process.env.ACE_DATA_DIR);
+  const quota = new DailyCallQuota(store.getDirectory(), options.quotaLimits ?? environmentQuotaLimits(process.env));
+  const adapters = new Map<string, AgentAdapter>([...baseAdapters].map(([name, adapter]) => [name, {
+    id: adapter.id,
+    propose: async (prompt, signal, config) => {
+      await quota.reserve(adapter.id);
+      return adapter.propose(prompt, signal, config);
+    },
+  }]));
   const listeners = new Map<string, Set<(session: DebateSession) => void>>();
   let brainstorming = false;
   const broadcast = (session: DebateSession) => {
@@ -31,7 +41,7 @@ export function makeApp(options: AppOptions = {}) {
   app.get('/api/health', async () => ({ status: 'ok', version: '0.4.0', milestone: 'M4' }));
   app.get('/api/metrics', async () => ({
     status: 'ok', worker: { running: !!worker.running, queued: worker.queued },
-    calls: worker.counters,
+    calls: worker.counters, dailyQuota: await quota.snapshot(),
   }));
   app.get('/api/providers', async () => {
     const probes = await probeInstalledClis();

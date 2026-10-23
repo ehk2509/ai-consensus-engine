@@ -18,6 +18,14 @@ export interface ProcessSpec {
   signal?: AbortSignal;
 }
 
+/** Prevent handing the council's own API credential to external provider CLIs and hooks. */
+function providerEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env, CI: 'true', NO_COLOR: '1' };
+  delete env.ACE_API_TOKEN;
+  delete env.ACE_TOKEN_FILE;
+  delete env.ACE_DATA_DIR;
+  return env;
+}
 function terminateTree(pid: number | undefined, fallback: () => void): void {
   if (!pid) { fallback(); return; }
   if (process.platform === 'win32') {
@@ -46,7 +54,7 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
       const child = spawn(spec.executable, spec.args, {
         cwd, shell: false, detached: process.platform !== 'win32',
         windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, CI: 'true', NO_COLOR: '1' },
+        env: providerEnvironment(),
       });
       const stdout: Buffer[] = [];
       let size = 0;
