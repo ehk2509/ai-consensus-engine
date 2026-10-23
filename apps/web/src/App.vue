@@ -330,6 +330,10 @@ onBeforeUnmount(closeStream);
             <div class="entry-top">
               <div><span class="phase-name">{{ phaseTitles[entry.phase] }} · {{ entry.round === 0 ? 'initial' : 'round ' + entry.round }}</span><h3>{{ stageLabel(entry) }}</h3></div>
               <span class="pill" :class="entry.status === 'fulfilled' ? 'fulfilled' : 'rejected'">{{ entry.status }}</span>
+              <span v-if="entry.phase === 'critique' && entry.critiqueParsing" class="muted">
+                JSON: {{ entry.critiqueParsing.status }} · {{ entry.critiqueParsing.recoveredObjections }} objection(s) recovered ·
+                {{ entry.critiqueParsing.originalChars }} original characters
+              </span>
             </div>
             <details :open="entry.phase === 'proposal' || entry.phase === 'revision'">
               <summary>{{ entry.status === 'fulfilled' ? 'Read response' : 'See outcome' }}</summary>

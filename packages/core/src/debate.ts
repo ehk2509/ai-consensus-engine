@@ -4,6 +4,7 @@ import type { AgentAdapter, BrainstormRequest, ProviderId } from './types.ts';
 import { executeConsensus } from './consensus.ts';
 import type { ConsensusState } from './consensus.ts';
 import { decodeCritique, packObjections } from './objection-utils.ts';
+import type { CritiqueParseStatus } from './objection-utils.ts';
 
 export type DebatePhase = 'proposal' | 'critique' | 'rebuttal' | 'revision' | 'synthesis' | 'vote' | 'resolution' | 'clarification';
 export type DebateStatus = 'queued' | 'running' | 'completed' | 'partial' | 'insufficient' | 'failed' | 'interrupted' | 'cancelled' | 'budget_exhausted';
@@ -47,6 +48,8 @@ export interface DebateEntry {
   /** A prior uncertain attempt explicitly authorized for replay by the operator. */
   retryAuthorized?: boolean;
   content?: string;
+  /** Structured parsing result from full provider output, not shortened display text. */
+  critiqueParsing?: { status: CritiqueParseStatus; originalChars: number; recoveredObjections: number };
   error?: string;
   durationMs: number;
   /** Actual wall-time budget applied to the individual CLI invocation. */
@@ -159,7 +162,7 @@ function promptForProposal(session: DebateSession): string {
     source('user_idea', session.request.prompt);
 }
 function promptForCritique(session: DebateSession, critic: ProviderId, target: ProviderId): string {
-  return HEADER + `\nStage: CRITIQUE, round ${session.round}. You are the independent author of ${label(critic, session.request.providers)}. Critique ${label(target, session.request.providers)} specifically.\nReturn a JSON object (no Markdown fences): {"strengths":["..."],"objections":[{"claim":"specific disputed claim","criticism":"why it may fail","severity":"low|medium|high","evidence":["reason or verifiable source"],"suggestedChange":"action"}]}. Provide up to 8 specific objections; do not invent citations. If structured output is impossible, explain the concern clearly in Markdown. Do not critique your own proposal. Be concise (under 1,000 words), use compact JSON, and never echo the supplied proposals.` +
+  return HEADER + `\nStage: CRITIQUE, round ${session.round}. You are the independent author of ${label(critic, session.request.providers)}. Critique ${label(target, session.request.providers)} specifically.\nReturn ONLY one complete compact JSON object, with no Markdown, comments, or prose before/after it: {"strengths":["..."],"objections":[{"claim":"specific disputed claim","criticism":"why it may fail","severity":"low|medium|high","evidence":["reason or verifiable source"],"suggestedChange":"action"}]}. Include at most FOUR specific objections, at most THREE strengths, each claim under 120 characters, each criticism under 220 characters, each evidence array at most two items of 100 characters, and each suggestedChange under 140 characters. Keep the entire JSON response under 3,500 characters and close all strings, objects, and arrays. If there are no objections, return an empty objections array. Do not invent citations, do not critique your own proposal, and never include copied proposal passages.` +
     source('user_idea', session.request.prompt, 6000) +
     source('your_current_proposal', latestContent(session, critic), 6500) +
     source('proposal_under_review', latestContent(session, target), 8000);
@@ -198,6 +201,7 @@ function captureObjections(session: DebateSession, entry: DebateEntry, raw: stri
   const target = entry.target;
   // Parse complete provider output BEFORE shortening its UI/display representation.
   const decoded = decodeCritique(raw);
+  entry.critiqueParsing = { status: decoded.status, originalChars: raw.length, recoveredObjections: decoded.records.length };
   const add = (value: Record<string, unknown>, kind: DebateObjection['kind']) => {
     const severity = ['low', 'medium', 'high'].includes(String(value.severity))
       ? value.severity as 'low' | 'medium' | 'high' : 'unspecified';
@@ -216,7 +220,10 @@ function captureObjections(session: DebateSession, entry: DebateEntry, raw: stri
   // replace recovered individual objections with a giant generic JSON string.
   for (const error of decoded.errors) add({
     claim: decoded.unparseable ? 'Unparseable critique evidence' : 'Malformed critique evidence',
-    criticism: error + ' Original source entry: ' + entry.id + '. Recheck the original critique before accepting. Excerpt: ' + bounded(raw, 650),
+    criticism: error + ' Original source entry: ' + entry.id + '. Original provider response length: ' + raw.length + ' characters. ' +
+      'The following preview is only for display (not what the parser received): ' +
+      raw.slice(0, 260).replace(/\s+/g, ' ').trim() + (raw.length > 260 ? ' [display preview shortened]' : '') +
+      '. Review the source response; no unfinished objection was invented.',
     severity: 'unspecified',
   }, 'parsing_failure');
 }
