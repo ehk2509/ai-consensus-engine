@@ -650,6 +650,28 @@ async function invokeInitialConsensus(
     throw error;
   }
 }
+/** Parsing failures are not successful checkpoints. Retain the raw response
+ * for audit, but require a named operator retry instead of replaying bad JSON.
+ */
+function invalidateConsensusResponse(state: ConsensusState,
+  stage: ConsensusCall['stage'], provider: ProviderId, draftSha?: string): void {
+  const item = [...(state.callJournal ?? [])].reverse().find(c =>
+    c.stage === stage && c.provider === provider &&
+    c.frozenDraftSha256 === draftSha && c.status === 'fulfilled');
+  if (item) {
+    item.status = 'rejected';
+    item.error = 'Returned content failed strict structured validation; explicit retry required.';
+  }
+}
+function invalidateNegotiationResponse(state: ConsensusState, cycle: number,
+  role: NegotiationCall['role'], provider: ProviderId): void {
+  const item = [...(state.negotiationCalls ?? [])].reverse().find(c =>
+    c.cycle === cycle && c.role === role && c.provider === provider && c.status === 'fulfilled');
+  if (item) {
+    item.status = 'rejected';
+    item.error = 'Returned content failed strict structured validation; explicit retry required.';
+  }
+}
 function negotiationRevisionPrompt(session: DebateSession, state: ConsensusState,
   author: ProviderId, packed: ContextPack): string {
   const feedback = state.votes.map(v => ({
@@ -789,6 +811,7 @@ async function executeNegotiationCycle(
       prompt, adapters, publish, signal, deadlineMs);
     parsed = parseJSON(raw);
     if (!parsed || typeof parsed.proposal !== 'string' || parsed.proposal.trim().length < 10) {
+      invalidateNegotiationResponse(state, cycleNumber, 're_synthesis', facilitator);
       throw new Error('Invalid negotiated synthesis.');
     }
   } catch (error) {
@@ -858,6 +881,8 @@ async function executeNegotiationCycle(
       vote = parseVote(rawVote, provider, session, candidate, votePrompt,
         Math.round(performance.now() - started));
     } catch (error) {
+      if (rawVote !== undefined && !String(error).includes('Contradictory accept ballot:'))
+        invalidateNegotiationResponse(state, cycleNumber, 're_vote', provider);
       vote = {
         provider, status: 'rejected', error: signal.aborted ? 'Re-vote cancelled or timed out.' :
           error instanceof Error && error.message.startsWith('Contradictory accept ballot:') ? error.message : safeError(error),
@@ -976,6 +1001,7 @@ export async function executeConsensus(
       if (!parsed || typeof parsed.proposal !== 'string' || parsed.proposal.trim().length < 10) {
         state.status = 'incomplete';
         state.reason = 'Facilitator returned an invalid structured draft. No ballots were attempted.';
+        invalidateConsensusResponse(state, 'synthesis', facilitator);
         state.draft = { author: facilitator, proposal: '', assumptions: [], evidence: [],
           rawResponse: bounded(rawDraft, MAX_RAW), provenance: provenance(facilitator, draftPrompt) };
         return;
@@ -1024,6 +1050,10 @@ export async function executeConsensus(
         if (interrupted(signal, deadlineMs)) throw new Error('Cancelled');
         vote = parseVote(rawResponse, provider, session, draft, prompt, Math.round(performance.now() - start));
       } catch (error) {
+        if (rawResponse !== undefined &&
+            !String(error).includes('Contradictory accept ballot:')) {
+          invalidateConsensusResponse(state, 'vote', provider, draft.sha256);
+        }
         vote = {
           provider, status: 'rejected', concerns: [], resolvedObjectionIds: [],
           error: interrupted(signal, deadlineMs) ? 'Provider vote cancelled or timed out.' :
