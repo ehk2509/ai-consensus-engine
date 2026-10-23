@@ -1,28 +1,38 @@
 import Fastify from 'fastify';
 import { brainstorm, validateRequest } from '../../../packages/core/src/brainstorm.ts';
-import { createDebateSession, executeDebate, validateDebateRequest } from '../../../packages/core/src/debate.ts';
+import { createDebateSession, validateDebateRequest } from '../../../packages/core/src/debate.ts';
 import type { DebateSession } from '../../../packages/core/src/debate.ts';
 import { PROVIDER_IDS } from '../../../packages/core/src/types.ts';
 import type { AgentAdapter } from '../../../packages/core/src/types.ts';
 import { createAdapters, probeInstalledClis } from './providers.ts';
 import { DebateStore } from './debate-store.ts';
+import { DurableDebateWorker } from './worker.ts';
+import { installLocalAuth } from './auth.ts';
 
-export interface AppOptions { adapters?: Map<string, AgentAdapter>; store?: DebateStore; }
+export interface AppOptions { adapters?: Map<string, AgentAdapter>; store?: DebateStore; apiToken?: string; }
 
 export function makeApp(options: AppOptions = {}) {
   const app = Fastify({ logger: true, bodyLimit: 16 * 1024 });
   const adapters = options.adapters ?? createAdapters();
   const store = options.store ?? new DebateStore(process.env.ACE_DATA_DIR);
   const listeners = new Map<string, Set<(session: DebateSession) => void>>();
-  const controllers = new Map<string, AbortController>();
-  let busy = false;
+  let brainstorming = false;
   const broadcast = (session: DebateSession) => {
     for (const listener of listeners.get(session.id) ?? []) listener(session);
   };
   const publish = async (session: DebateSession) => { await store.save(session); broadcast(session); };
-  app.addHook('onClose', async () => { for (const controller of controllers.values()) controller.abort(); });
+  const worker = new DurableDebateWorker(
+    store, adapters, publish, (error, message) => app.log.error({ err: error }, message),
+  );
+  installLocalAuth(app, options.apiToken ?? process.env.ACE_API_TOKEN);
+  app.addHook('onReady', async () => { await worker.start(); });
+  app.addHook('onClose', async () => { await worker.stop(); });
 
-  app.get('/api/health', async () => ({ status: 'ok', version: '0.3.0', milestone: 'M3' }));
+  app.get('/api/health', async () => ({ status: 'ok', version: '0.4.0', milestone: 'M4' }));
+  app.get('/api/metrics', async () => ({
+    status: 'ok', worker: { running: !!worker.running, queued: worker.queued },
+    calls: worker.counters,
+  }));
   app.get('/api/providers', async () => {
     const probes = await probeInstalledClis();
     return {
@@ -37,53 +47,46 @@ export function makeApp(options: AppOptions = {}) {
     let input;
     try { input = validateRequest(request.body); }
     catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : 'Invalid request.' }); }
-    if (busy) return reply.code(409).send({ error: 'Another session is running.' });
-    busy = true;
+    if (brainstorming || worker.busy) return reply.code(409).send({ error: 'A debate worker is busy.' });
+    brainstorming = true;
     try { return await brainstorm(input, adapters); }
-    finally { busy = false; }
+    finally { brainstorming = false; }
   });
 
   app.post('/api/debates', async (request, reply) => {
     let input;
     try { input = validateDebateRequest(request.body); }
     catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : 'Invalid request.' }); }
-    if (busy) return reply.code(409).send({ error: 'Another session is running.' });
+    if (brainstorming) return reply.code(409).send({ error: 'Independent proposal session is running.' });
     const session = createDebateSession(input);
-    busy = true;
-    store.activate(session.id);
-    try { await store.save(session); }
-    catch {
-      store.deactivate(session.id);
-      busy = false;
-      return reply.code(500).send({ error: 'Could not persist debate session.' });
+    try { await worker.enqueue(session); }
+    catch (error) {
+      app.log.error({ err: error }, 'Unable to queue debate');
+      return reply.code(500).send({ error: 'Unable to durably queue this debate.' });
     }
-    const controller = new AbortController();
-    controllers.set(session.id, controller);
-    // Work starts after durable creation. Clients subscribe over SSE or poll for updates.
-    void executeDebate(session, adapters, publish, controller.signal).catch(async (error: unknown) => {
-      app.log.error({ err: error }, 'Debate crashed');
-      session.status = 'failed';
-      session.phase = null;
-      session.finishedAt = new Date().toISOString();
-      session.error = 'Debate failed unexpectedly. Completed records remain available.';
-      try { await publish(session); }
-      catch (writeError) { app.log.error({ err: writeError }, 'Unable to persist failed debate'); }
-    }).finally(() => {
-      controllers.delete(session.id);
-      store.deactivate(session.id);
-      busy = false;
-    });
-    return reply.code(202).send({ id: session.id, status: 'queued' });
+    return reply.code(202).send({ id: session.id, status: 'queued', queued: worker.queued });
   });
 
   app.post<{ Params: { id: string } }>('/api/debates/:id/cancel', async (request, reply) => {
-    const controller = controllers.get(request.params.id);
-    if (controller) {
-      controller.abort();
-      return reply.code(202).send({ status: 'cancelling', id: request.params.id });
+    const outcome = await worker.cancel(request.params.id);
+    if (outcome === 'missing') return reply.code(404).send({ error: 'Session not found.' });
+    if (outcome === 'inactive') return reply.code(409).send({ error: 'Session is not currently queued or running.' });
+    return reply.code(202).send({ status: outcome, id: request.params.id });
+  });
+
+  app.post<{ Params: { id: string }; Body: { retryCallIds?: string[]; acknowledgeMayRepeatCall?: boolean } }>('/api/debates/:id/resume', async (request, reply) => {
+    const body = request.body ?? {};
+    if ((body.retryCallIds !== undefined && (!Array.isArray(body.retryCallIds) ||
+      body.retryCallIds.length > 40 || body.retryCallIds.some(id => typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)))) ||
+      (body.acknowledgeMayRepeatCall !== undefined && typeof body.acknowledgeMayRepeatCall !== 'boolean')) {
+      return reply.code(400).send({ error: 'Invalid explicit retry authorization.' });
     }
-    if (!await store.get(request.params.id)) return reply.code(404).send({ error: 'Session not found.' });
-    return reply.code(409).send({ error: 'Session is not currently running.' });
+    const result = await worker.resume(request.params.id, body.retryCallIds, body.acknowledgeMayRepeatCall);
+    if (!result) return reply.code(404).send({ error: 'Session not found.' });
+    if (result.status === 'conflict') return reply.code(409).send({
+      error: result.reason, uncertainCallIds: result.uncertainCallIds ?? [],
+    });
+    return reply.code(202).send(result);
   });
 
   app.get<{ Params: { id: string } }>('/api/debates/:id/report', async (request, reply) => {

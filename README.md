@@ -4,7 +4,7 @@
 
 Local-first, multi-provider brainstorming and structured AI deliberation powered by your installed **OpenAI Codex**, **Claude Code**, and **Gemini through Antigravity** CLI sessions.
 
-> **Current milestone: M3 — explicit consensus evaluation.** Following independent proposals, critiques, rebuttals and revisions, the optional M3 council drafts a shared proposal, gathers independently structured votes, and produces a transparent decision record. Agreement is never fabricated when ballots fail or critical concerns remain.
+> **Current milestone: M4 — durable, locally authenticated execution (v0.4.0).** Following independent proposals, critiques, rebuttals and revisions, the optional M3 council drafts a shared proposal, gathers independently structured votes, and produces a transparent decision record. Agreement is never fabricated when ballots fail or critical concerns remain.
 
 ## Quick start
 
@@ -34,16 +34,19 @@ Critiques for one provider are deliberately serialized to avoid launching multip
 
 ## API
 
-The Fastify API listens on `127.0.0.1:8787` and is unauthenticated: do not expose it to the internet.
+The Fastify API listens on `127.0.0.1:8787`. Its actual server entrypoint requires a local API token (automatically generated and saved to `.ace-data/api-token` when `ACE_API_TOKEN` is unset). The UI exchanges the token for a 12-hour HttpOnly cookie. Do not expose the server to a network.
 
-- `GET /api/health` — health
+- `GET /api/health` — health (public)
+- `POST /api/auth/login`, `GET /api/auth/status` — authenticate using a local token
+- `GET /api/metrics` — authenticated queue depth and worker counters
 - `GET /api/providers` — binary presence only (not account authentication)
 - `POST /api/brainstorms` — backwards-compatible M1 independent proposals
 - `POST /api/debates` — create an async M2 session, returns HTTP 202 with `id`
 - `GET /api/debates` — recent local sessions
 - `GET /api/debates/:id` — full timeline and stage outputs
 - `GET /api/debates/:id/events` — server-sent live update notifications with increasing sequence IDs
-- `POST /api/debates/:id/cancel` — cancel current debate (202), or 409 if it already stopped
+- `POST /api/debates/:id/cancel` — cancel active or queued debate
+- `POST /api/debates/:id/resume` — explicit recovery, with acknowledged retry IDs for uncertain calls
 - `GET /api/debates/:id/report` — download recorded M3 decision report as Markdown (409 when absent)
 
 Example:
@@ -72,7 +75,7 @@ Evidence claims in a generated draft are recorded as **unverified**. The app doe
 
 Snapshots are atomically persisted after each stage and each agent response, by default under `.ace-data/debates/<uuid>.json`, which is gitignored. Override storage with `ACE_DATA_DIR=/private/path`. Session files contain the original idea, proposals, structured objections, critiques, rebuttals and revisions **in plain text**; protect this folder if your ideas are confidential.
 
-A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. Cancelling or exceeding a time/call budget terminates active CLI process groups where supported and preserves the partial timeline. **Automatic execution resume** remains M4 work; explicit cancellation is already supported. In M2 only one session can execute at a time per API process.
+A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. Cancelling or exceeding a time/call budget terminates active CLI process groups where supported and preserves the partial timeline. Safe recovery of never-issued queued work is implemented in M4; manually resuming interrupted debate stages preserves finished calls. Uncertain in-flight calls require explicit authorization before retry; no silent replay is allowed. Only one worker process may own the data directory.
 
 ## Limits and security
 
@@ -99,7 +102,7 @@ Tech stack: Fastify, Vue 3/Vite, TypeScript, Node test runner, local CLI adapter
 - **M1:** Three independent providers, parallel proposals and local UI — implemented
 - **M2:** Cross-review, rebuttals, revisions, history and live progress — merged
 - **M3:** Explicit voting, traceable evidence claims, dissent and qualified consensus reports — implemented in this PR
-- **M4:** Production-grade authentication, cancellation/resume, durable worker queue, CLI isolation, API adapters, quotas and benchmarks
+- **M4:** v0.4.0 durable local queue, checkpoint journaling, explicit crash recovery, default token authentication, single-writer locking, metrics and failure tests. Further hardening (hardened sandboxes, direct API providers, comprehensive performance benchmarks) remains outstanding.
 
 The goal is a **traceable, defensible decision**, not artificial agreement.
 
@@ -140,3 +143,13 @@ The synthesis and vote contexts prioritize open high-severity objections using c
 When initial votes satisfy the policy but substantive critical objections lack author sign-off, M3 may run **one final resolution call per objection author**, subject to remaining call/time budgets. This requires exact IDs and explicit reasons; unparseable-evidence records cannot be cleared by a generic accept vote. Contradictory accept ballots trigger one separately logged clarification call, which may result in a conditional or rejected vote. No unlimited retry loops exist, and all follow-ups are recorded in the session and report.
 
 The `blocked_by_unparseable_evidence` verdict explicitly distinguishes parser/integrity problems from `blocked` decisions caused by actual substantive objections. Existing historical sessions are not rewritten. For a previous blocked session, launch a new run to benefit from the fixes and budget for possible follow-up calls (at most two additional calls per selected agent across clarification and final sign-off).
+
+## M4 — Durable local execution and recovery (v0.4.0)
+
+**Secure-by-default local server:** Starting `npm run dev` creates a cryptographically random local API token if `ACE_API_TOKEN` is absent. Read `.ace-data/api-token` and enter it in the web app's unlock screen. The token file has restricted owner-only permissions; never share or commit it. API clients can use `Authorization: Bearer <token>`. The browser uses a 12-hour HttpOnly, SameSite=Strict cookie. The server listens only on loopback; do not expose it publicly. User-configured CLI hooks and tools can still act with the account's privileges; these are not hardened VM sandboxes.
+
+**Durable queue:** New debate requests are persisted before a single local worker starts them, and additional sessions queue instead of being rejected. After a restart, only never-issued queued sessions automatically resume. A single-writer filesystem lease prevents concurrent server instances from using the same storage directory on one machine. The `/api/metrics` endpoint reports queue length, active worker status, and aggregate outcome counters.
+
+**Write-ahead call journal:** Every provider invocation first persists an `issued` entry and reserves a call-budget slot. If a process dies before recording the response, its status is uncertain: the provider may have processed and billed the call. `POST /api/debates/:id/resume` rejects an uncertain call until the operator explicitly provides `retryCallIds` and `acknowledgeMayRepeatCall:true`. Prior entries remain in the audit trail and consume their original call-budget reservations. Completed calls are never auto-replayed; previously completed stage records are reused.
+
+**Limitations:** M4 recovery covers debate proposal/critique/rebuttal/revision steps. Interrupted synthesis and consensus votes are not auto-replayed; they require a new run. There is no multi-host/distributed worker, hardened CLI container/VM isolation, direct hosted provider API integration or external tracing backend yet. A clean server shutdown cancels the active session but leaves not-yet-started queued work for a future restart. These areas remain necessary for a production-grade deployment.
