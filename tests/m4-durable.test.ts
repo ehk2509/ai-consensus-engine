@@ -136,8 +136,11 @@ test('data directory lease refuses a second worker and is released after shutdow
   const dir = await mkdtemp(join(tmpdir(), 'ace-m4-lease-'));
   try {
     const first = await new DebateStore(dir).acquireWorkerLease();
-    await assert.rejects(new DebateStore(dir).acquireWorkerLease(), /Another active worker/);
-    await first();
+    try {
+      await assert.rejects(new DebateStore(dir).acquireWorkerLease(), /Another active worker/);
+    } finally {
+      await first(); // Never strand an external flock helper on failed assertions.
+    }
     const second = await new DebateStore(dir).acquireWorkerLease();
     await second();
   } finally { await rm(dir, { recursive: true, force: true }); }

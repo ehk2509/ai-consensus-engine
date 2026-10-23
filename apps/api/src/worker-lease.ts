@@ -57,7 +57,7 @@ export async function acquireLocalWorkerLease(directory: string): Promise<() => 
         }
       });
       child.once('error', (error) => rejectOnce(new Error('Worker lock helper unavailable: ' + error.message)));
-      child.once('exit', () => rejectOnce(new Error('Another worker owns this data directory, or OS lock failed. ' + stderr)));
+      child.once('exit', () => rejectOnce(new Error('Another active worker owns this data directory, or OS lock failed. ' + stderr)));
     });
   } catch (error) {
     child.stdin.destroy();

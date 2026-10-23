@@ -102,7 +102,7 @@ test('kernel lock survives simultaneous stale-owner recovery without dual leader
   try {
     for(let i=0;i<200&&!ready.includes('LOCK_HELD');i++)await delay(20);
     assert.match(ready,/LOCK_HELD/);
-    await assert.rejects(new DebateStore(dir).acquireWorkerLease(),/Another worker owns/i);
+    await assert.rejects(new DebateStore(dir).acquireWorkerLease(),/Another (?:active )?worker owns/i);
     owner.kill('SIGKILL');
     await new Promise<void>(resolve=>{if(owner.exitCode!==null||owner.signalCode!==null)resolve();
       else owner.once('exit',()=>resolve());});
