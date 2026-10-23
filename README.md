@@ -184,3 +184,29 @@ The previous decision report disclosed 63 omitted objections (13 critical), whil
 **Partial original-author signoff:** When a valid independent vote explicitly marks a specific authored objection ID as fixed, that ID can be closed even if the agent's overall verdict remains `conditional` or `reject`. This never converts a dissenting ballot to acceptance and cannot close any parser-integrity sentinel. Unconfirmed records remain open, and no model verdict implies fact verification. This is an evidence-accounting fix, not M5's proposed negotiation/re-vote system.
 
 **Existing reports are immutable.** The historical debate remains disputed with its original omitted/context errors; rerun the same idea with the new version to exercise full shared context. Model prompt lengths and hence token usage can increase for large debates. The shared excerpt cap is conservative; exceptionally large objection ledgers still fail closed rather than silently dropping critical material.
+
+## M5 — Intelligent Consensus Negotiation (v0.5.0)
+
+**Opt-in bounded negotiated cycles.** Set `negotiationCycles` to `0` (API compatibility default), `1`, or `2` on a debate with `consensus:true`. The UI defaults to 1 cycle. After the initial frozen synthesis and independent votes, a disputed or substantively blocked outcome may initiate targeted revisions by each selected model; a neutral facilitator then creates a *new frozen synthesis*, and all agents cast *new independent votes tied to its SHA-256*. The older draft, ballots and objection IDs remain available as audit history. No vote carries over to a changed draft, and every model call counts toward the existing total call limit and 30-minute deadline.
+
+**Hard limits and honest abstention.** One cycle requires `2 * providers + 1` additional calls; if that cannot fit, the cycle is recorded as skipped and the prior verdict remains. A failed targeted revision/synthesis preserves the prior frozen draft and votes without claiming consensus. A re-vote failure cannot be filled from the original vote. Cycles stop on consensus, exhausted budgets or unverified critical context. Parsing-failure sentinels and omitted critical context prevent negotiated acceptance rather than being 'fixed' by a persuasive rewrite. The original objection authors must explicitly sign off individual critical objection IDs; a new draft alone does not close them.
+
+**Security:** The M5 additional provider calls use the same authenticated local CLI worker, quotas and call budget. Each M5 invocation is journaled as `issued` before execution and recorded as fulfilled/rejected. Consensus-stage crash recovery still fails closed and will never auto-replay an uncertain call. This is an in-process local-first negotiation workflow, not a distributed execution system.
+
+The debate report includes an M5 negotiation audit with original/follow-up vote outcomes and original/revised SHA-256 values. Old M4 runs and their reports are not rewritten.
+
+### M5 traceable grouping and decision matrix
+
+The engine deterministically groups only near-identical open substantive objections (high overlap of claim and criticism terms, Jaccard threshold 0.85). This is a conservative **textual similarity heuristic**, not embedding-based semantic equivalence. Parsing-integrity failures are never grouped with substantive objections, and confirmed/superseded objections are excluded from this advisory view. **No ID, criticism, author status or severity is removed or auto-resolved by grouping**; the full global ledger remains authoritative.
+
+Negotiated synthesis can optionally include an auditable `decisions` array containing explicit issue, choice, rationale, referenced exact objection IDs and remaining uncertainties. Only known IDs are retained; the decisions are model-generated suggestions, never factual verification or original-author sign-off. The UI and Markdown report show this decision matrix and the independent ballots for each revised draft.
+
+### M5.1 — Consensus-correctness stabilization
+
+- **Draft-specific objection sign-off:** An original-author confirmation is recorded against the exact frozen draft SHA-256. On a changed draft, it is reopened by default and must be explicitly reconfirmed. Prior confirmations remain in append-only `authorSignoffs` history. Only complete independent ballot sets can mutate author-signoff status.
+- **Accurate cycle outcomes:** Negotiation cycles distinguish `completed`, `skipped`, `failed`, `partial` (invalid new ballots), and `interrupted` (cancelled or deadline exhausted). Earlier votes remain historical, not current quorum evidence.
+- **Budget reservations:** A cycle requires room for 2N+1 provider calls, up to N contradictory-ballot clarifications, and one original-author confirmation call per currently open critical-objection author. Unused reservations are not charged; all actual calls remain metered.
+- **Re-vote parity:** New frozen-draft votes receive the same bounded contradiction clarification as the original voting phase; M5 clarification calls are journaled.
+- **Targeted negotiation:** Per-provider action plans rank unresolved critical concerns, especially authored objections. The full shared objection ledger remains available; advisory duplicate groups never collapse source IDs or imply semantic identity. Vector/embedding semantic retrieval remains a future quality experiment, not an automatic objection-resolution mechanism.
+
+**Frozen-draft identity:** M5.1 hashes the complete voted-on draft (author, proposal, assumptions, and evidence claims), rather than only its Markdown proposal. Changing source/evidence claims or assumptions without changing the prose still requires a new vote and original-author reconfirmation. Historical reports remain immutable.

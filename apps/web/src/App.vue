@@ -9,7 +9,7 @@ type Mode = 'debate' | 'independent';
 type SessionSummary = { id: string; prompt: string; providers: ProviderId[]; maxRounds: number; createdAt: string; updatedAt: string; status: DebateStatus; round: number };
 const labels: Record<ProviderId, string> = { codex: 'Codex · OpenAI', claude: 'Claude Code', gemini: 'Gemini · Antigravity' };
 const phases: DebatePhase[] = ['proposal', 'critique', 'rebuttal', 'revision'];
-const phaseTitles: Record<DebatePhase, string> = { proposal: 'Independent proposals', critique: 'Peer critiques', rebuttal: 'Rebuttals', revision: 'Revised proposals', synthesis: 'Shared draft', vote: 'Independent voting', clarification: 'Ballot clarification', resolution: 'Objection sign-off' };
+const phaseTitles: Record<DebatePhase, string> = { proposal: 'Independent proposals', critique: 'Peer critiques', rebuttal: 'Rebuttals', revision: 'Revised proposals', synthesis: 'Shared draft', vote: 'Independent voting', clarification: 'Ballot clarification', resolution: 'Objection sign-off', negotiation: 'Targeted negotiation' };
 const options: ProviderId[] = ['codex', 'claude', 'gemini'];
 const selected = ref<ProviderId[]>([...options]);
 const mode = ref<Mode>('debate');
@@ -23,6 +23,7 @@ watch(maxRounds, (rounds) => {
   if (rounds === 2 && maxDurationMinutes.value < 20) maxDurationMinutes.value = 20;
 });
 const consensusEnabled = ref(true);
+const negotiationCycles = ref(1);
 const quorum = ref<'unanimous' | 'two_thirds'>('unanimous');
 const blockCritical = ref(true);
 const pending = ref(false);
@@ -51,7 +52,7 @@ const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry)
   (visibleRound.value === -1 || entry.round === visibleRound.value)));
 const completed = computed(() => Boolean(debate.value && !['queued', 'running'].includes(debate.value.status)));
 const completedCount = computed(() => debate.value?.entries.filter((entry) => entry.status === 'fulfilled').length ?? 0);
-const estimatedCalls = computed(() => selected.value.length + maxRounds.value * (selected.value.length * (selected.value.length - 1) + 2 * selected.value.length) + (consensusEnabled.value ? selected.value.length + 1 : 0));
+const estimatedCalls = computed(() => selected.value.length + maxRounds.value * (selected.value.length * (selected.value.length - 1) + 2 * selected.value.length) + (consensusEnabled.value ? selected.value.length + 1 + negotiationCycles.value * (2 * selected.value.length + 1) : 0));
 const maximumFollowupCalls = computed(() => consensusEnabled.value ? selected.value.length * 2 : 0);
 
 function markdown(content: string): string {
@@ -201,7 +202,7 @@ async function submit() {
     const isDebate = mode.value === 'debate';
     const response = await fetch(isDebate ? '/api/debates' : '/api/brainstorms', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000, consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value } : {}) }),
+      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000, consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value, negotiationCycles: negotiationCycles.value } : {}) }),
     });
     const body: unknown = await response.json();
     if (!response.ok) {
@@ -289,8 +290,9 @@ onBeforeUnmount(closeStream);
               <select v-model="quorum" :disabled="pending" aria-label="Voting policy"><option value="unanimous">Unanimous</option><option value="two_thirds">At least two-thirds</option></select>
             </label>
             <label class="consensus-toggle"><input v-model="blockCritical" type="checkbox" :disabled="pending" /> Block unresolved critical objections</label>
+            <label>Negotiation cycles <select v-model.number="negotiationCycles" :disabled="pending" aria-label="Maximum negotiation cycles"><option :value="0">Disabled</option><option :value="1">1 targeted cycle</option><option :value="2">2 targeted cycles</option></select></label>
           </div>
-          <p class="muted">Approximate maximum: {{ estimatedCalls }} model calls. Later revision rounds can take up to 4 minutes per provider call (within the overall time cap). A 3-round run may need 30 minutes. Consensus may optionally use up to {{ maximumFollowupCalls }} additional budgeted calls for ballot clarification and original-author objection sign-off. Voting never implies facts have been verified.</p>
+          <p class="muted">Approximate maximum: {{ estimatedCalls }} model calls. Later revision rounds can take up to 4 minutes per provider call (within the overall time cap). A 3-round run may need 30 minutes. Each negotiation cycle reserves {{ selected.length * 2 + 1 }} model calls for targeted revisions, revised synthesis and independent re-votes. Consensus may optionally use up to {{ maximumFollowupCalls }} additional budgeted calls for ballot clarification and original-author objection sign-off. Voting never implies facts have been verified.</p>
           <p v-if="estimatedCalls > maxCalls" class="warning" role="status">The configured {{ maxCalls }}-call budget may prevent consensus voting. Reduce rounds or turn off voting.</p>
         </div>
         <div class="row footer-row"><span class="muted">Local accounts · Traceable objections, independent votes, no forced agreement.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
@@ -360,9 +362,30 @@ onBeforeUnmount(closeStream);
             <p class="muted">{{ debate.consensus.reason || 'The council is evaluating the shared draft.' }}</p>
             <p class="muted">Consensus records model judgments, not externally verified facts. The facilitator's self-authored vote is identified and cannot alone satisfy the non-author acceptance requirement.</p>
             <p class="muted">Quorum: {{ debate.consensus.policy.quorum.replace('_', '-') }} · Critical objection gate: {{ debate.consensus.policy.blockCritical ? 'Enabled' : 'Disabled' }} · {{ debate.consensus.votes.length }} ballots</p>
+            <p v-if="debate.consensus.objectionGroups" class="muted">{{ debate.consensus.objectionGroups.filter(g => g.objectionIds.length > 1).length }} similar-objection groups detected for review; all original objection IDs are preserved.</p>
             <p v-if="debate.consensus.objectionCoverage" class="muted">Shared objection context: {{ debate.consensus.objectionCoverage.included }}/{{ debate.consensus.objectionCoverage.total }} records included as excerpts · {{ debate.consensus.objectionCoverage.omitted }} omitted, including {{ debate.consensus.objectionCoverage.omittedCritical }} critical. Synthesis and ballots use the same global ledger (SHA-256: {{ debate.consensus.objectionCoverage.contextSha256.slice(0, 12) }}…).</p>
             <p v-if="debate.consensus.contextOmittedCriticalIds?.length" class="warning">{{ debate.consensus.contextOmittedCriticalIds.length }} critical objections could not fit into model context. Consensus cannot be verified.</p>
             <p v-if="debate.consensus.status === 'blocked_by_unparseable_evidence'" class="warning">Parsing/incomplete-source evidence prevents final consensus. This is not the same as a substantive disagreement.</p>
+            <div v-if="debate.consensus.negotiationHistory?.length" class="resolution-audit">
+              <strong>M5 negotiation history</strong>
+              <p class="muted">{{ debate.consensus.negotiationHistory.length }} cycle(s) recorded · Prior ballots are preserved · A new SHA-256 is required before any re-vote.</p>
+              <details v-for="cycle in debate.consensus.negotiationHistory" :key="cycle.number">
+                <summary>Cycle {{ cycle.number }} · {{ cycle.outcome }} · {{ cycle.priorStatus }} → {{ debate.consensus.status }}</summary>
+                <p v-if="cycle.reason" class="warning">{{ cycle.reason }}</p>
+                <p class="muted">Original: {{ cycle.originalDraftSha256 }} · Revised: {{ cycle.revisedDraftSha256 ?? 'none' }}</p>
+                <p v-for="revision in cycle.revisions" :key="revision.provider" class="muted">{{ labels[revision.provider] }} targeted revision: {{ revision.status }} {{ revision.error ?? '' }}</p>
+                <div v-if="cycle.decisions?.length" class="evidence-register">
+                  <strong>Structured decision matrix (model-generated, unverified)</strong>
+                  <p v-for="(decision, i) in cycle.decisions" :key="i" class="muted">
+                    {{ decision.issue }} → {{ decision.choice }} · {{ decision.rationale }}
+                    · Related objections: {{ decision.relatedObjectionIds.join(', ') || 'none' }}
+                    · Remaining uncertainties: {{ decision.remainingUncertainties.join('; ') || 'none reported' }}
+                  </p>
+                </div>
+                <p class="muted">Original votes: {{ cycle.previousVotes.map(v => labels[v.provider] + ': ' + (v.verdict ?? 'invalid')).join(' · ') }}</p>
+                <p v-if="cycle.newVotes?.length" class="muted">Independent re-votes: {{ cycle.newVotes.map(v => labels[v.provider] + ': ' + (v.verdict ?? 'invalid')).join(' · ') }}</p>
+              </details>
+            </div>
             <div v-if="debate.consensus.clarificationAttempts?.length || debate.consensus.resolutionAttempts?.length" class="resolution-audit"><strong>Final reconciliation audit</strong><p class="muted">Clarifications: {{ debate.consensus.clarificationAttempts?.length ?? 0 }} · Original-author sign-off attempts: {{ debate.consensus.resolutionAttempts?.length ?? 0 }} · All follow-up calls count toward the session budget.</p><details v-for="(attempt, i) in debate.consensus.resolutionAttempts ?? []" :key="i"><summary>{{ labels[attempt.provider] }} · {{ attempt.decisions.length }}/{{ attempt.objectionIds.length }} objections answered</summary><p v-if="attempt.error" class="warning">{{ attempt.error }}</p><p v-for="item in attempt.decisions" :key="item.objectionId" class="muted">{{ item.objectionId }} · {{ item.resolved ? 'Resolved by author' : 'Still open' }}: {{ item.reason }}</p></details></div>
             <div v-if="debate.consensus.draft" class="draft-wrap">
               <div class="row"><strong>Frozen shared proposal</strong><span class="muted">Facilitator: {{ labels[debate.consensus.draft.author] }}</span></div>
