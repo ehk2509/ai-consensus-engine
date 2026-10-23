@@ -249,6 +249,14 @@ ${claims}
 
 ${state.draft?.assumptions.map((v) => '- ' + v).join('\n') || 'Not available.'}
 
+## Objection sign-off provenance
+
+${session.objections.filter(o => o.authorSignoffs?.length).length} objection(s) have recorded draft-bound author confirmations.
+${session.objections.flatMap(o => (o.authorSignoffs ?? []).map(approval =>
+  '- ' + o.id + ' (' + o.author + '): confirmed against SHA-256 ' + approval.draftSha256 +
+  ' at ' + approval.at + '; current status: ' + (o.authorStatus ?? 'open') +
+  '; reason: ' + approval.reason)).join('\n') || 'No recorded draft-specific sign-offs.'}
+
 ## Objection grouping (advisory)
 
 ${state.objectionGroups?.length ?? 0} related-objection groups retained. ${state.objectionGroups?.filter(g => g.objectionIds.length > 1).length ?? 0} group(s) contain likely duplicates. All original objection IDs remain in the decision ledger; grouping never closes or removes an objection.
