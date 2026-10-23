@@ -14,15 +14,21 @@ export class DurableDebateWorker {
   private runPromise: Promise<void> | null = null;
   private releaseLease: (() => Promise<void>) | null = null;
   private stopped = false;
+  private readonly store: DebateStore;
+  private readonly adapters: ReadonlyMap<string, AgentAdapter>;
+  private readonly publish: (session: DebateSession) => Promise<void>;
+  private readonly logError: (error: unknown, message: string) => void;
   readonly counters: WorkerCounters = {
     started: 0, completed: 0, failed: 0, cancelled: 0, recoveredQueued: 0, uncertain: 0,
   };
   constructor(
-    private readonly store: DebateStore,
-    private readonly adapters: ReadonlyMap<string, AgentAdapter>,
-    private readonly publish: (session: DebateSession) => Promise<void>,
-    private readonly logError: (error: unknown, message: string) => void,
-  ) {}
+    store: DebateStore,
+    adapters: ReadonlyMap<string, AgentAdapter>,
+    publish: (session: DebateSession) => Promise<void>,
+    logError: (error: unknown, message: string) => void,
+  ) {
+    this.store = store; this.adapters = adapters; this.publish = publish; this.logError = logError;
+  }
 
   get queued(): number { return this.pending.length; }
   get running(): string | null { return this.runningId; }
