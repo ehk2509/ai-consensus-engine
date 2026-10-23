@@ -220,10 +220,10 @@ function captureObjections(session: DebateSession, entry: DebateEntry, raw: stri
   // replace recovered individual objections with a giant generic JSON string.
   for (const error of decoded.errors) add({
     claim: decoded.unparseable ? 'Unparseable critique evidence' : 'Malformed critique evidence',
-    criticism: error + ' Original source entry: ' + entry.id + '. Original provider response length: ' + raw.length + ' characters. ' +
-      'The following preview is only for display (not what the parser received): ' +
-      raw.slice(0, 260).replace(/\s+/g, ' ').trim() + (raw.length > 260 ? ' [display preview shortened]' : '') +
-      '. Review the source response; no unfinished objection was invented.',
+    criticism: 'Preview only for display (not parser input): ' +
+      raw.slice(0, 155).replace(/\s+/g, ' ').trim() + (raw.length > 155 ? ' [display preview shortened]. ' : '. ') +
+      error + ' Original source entry: ' + entry.id + '. Original provider response length: ' + raw.length +
+      ' characters. Review the source response; no unfinished objection was invented.',
     severity: 'unspecified',
   }, 'parsing_failure');
 }
