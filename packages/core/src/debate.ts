@@ -36,6 +36,10 @@ export interface DebateObjection {
   /** Only original-author final-ballot signoff can close an objection. */
   authorStatus?: 'open' | 'confirmed_resolved' | 'superseded';
   authorResolutionReason?: string;
+  /** A sign-off is valid only for the exact frozen draft it reviewed. */
+  authorResolutionDraftSha256?: string;
+  /** Append-only history; re-opening on a revised draft must not erase prior evidence. */
+  authorSignoffs?: Array<{ draftSha256: string; reason: string; at: string }>;
   supersededBy?: string;
 }
 export interface DebateEntry {

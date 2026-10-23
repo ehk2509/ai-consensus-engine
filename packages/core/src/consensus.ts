@@ -53,7 +53,7 @@ export interface ConsensusVote {
 export interface NegotiationCall {
   id: string;
   cycle: number;
-  role: 'targeted_revision' | 're_synthesis' | 're_vote';
+  role: 'targeted_revision' | 're_synthesis' | 're_vote' | 'clarification';
   provider: ProviderId;
   promptSha256: string;
   status: 'issued' | 'fulfilled' | 'rejected';
@@ -70,7 +70,7 @@ export interface NegotiationDecision {
 }
 export interface NegotiationCycle {
   number: number;
-  outcome: 'running' | 'completed' | 'skipped' | 'failed';
+  outcome: 'running' | 'completed' | 'skipped' | 'partial' | 'interrupted' | 'failed';
   reason?: string;
   priorStatus: ConsensusStatus;
   originalDraftSha256: string;
@@ -79,6 +79,8 @@ export interface NegotiationCycle {
   previousDraft: ConsensusDraft;
   previousVotes: ConsensusVote[];
   revisions: Array<{ provider: ProviderId; proposal?: string; tradeoffs: string[]; status: 'fulfilled' | 'rejected'; error?: string }>;
+  /** Per-provider IDs prioritized as negotiation targets; does not imply resolution. */
+  priorityObjectionIds?: string[];
   /** Structured tradeoffs are advisory; they never close objections or verify facts. */
   decisions?: NegotiationDecision[];
   newVotes?: ConsensusVote[];
@@ -288,14 +290,38 @@ ${state.reason ?? 'No further explanation.'}
 
 *This report is a model-deliberation artifact, not an external fact-check.*\n`;
 }
-function applyAuthorResolutions(session: DebateSession, valid: ConsensusVote[]): void {
+/** Original-author sign-off is tied to exactly one frozen SHA-256. Never treat
+ * consent to Draft A as consent to a meaningfully changed Draft B.
+ */
+function recordAuthorSignoff(objection: DebateObjection, draftSha256: string, reason: string): void {
+  objection.authorSignoffs ??= [];
+  if (!objection.authorSignoffs.some(item => item.draftSha256 === draftSha256 && item.reason === reason)) {
+    objection.authorSignoffs.push({ draftSha256, reason, at: new Date().toISOString() });
+  }
+  objection.authorStatus = 'confirmed_resolved';
+  objection.authorResolutionDraftSha256 = draftSha256;
+  objection.authorResolutionReason = reason;
+}
+function reopenChangedDraftSignoffs(session: DebateSession, newDraftSha256: string): void {
+  for (const objection of session.objections) {
+    if (objection.kind === 'parsing_failure' || objection.authorStatus !== 'confirmed_resolved') continue;
+    if (objection.authorResolutionDraftSha256 === newDraftSha256) continue;
+    objection.authorStatus = 'open';
+    objection.authorResolutionReason = 'Previous sign-off applied to a different draft; the original author must explicitly reconfirm this objection. Prior sign-off remains in authorSignoffs.';
+    objection.authorResolutionDraftSha256 = undefined;
+  }
+}
+function interrupted(signal: AbortSignal, deadlineMs?: number): boolean {
+  return signal.aborted || (deadlineMs !== undefined && Date.now() >= deadlineMs);
+}
+function applyAuthorResolutions(session: DebateSession, valid: ConsensusVote[], draftSha256: string): void {
   for (const vote of valid) {
-    if (!vote.verdict) continue;
+    if (!vote.verdict || vote.draftSha256 !== draftSha256) continue;
     // Original authors may sign off on *specific* fixed objections even when
     // they reject the overall draft. Their overall dissent remains unchanged.
     for (const id of vote.resolvedObjectionIds) {
       const objection = session.objections.find((o) => o.id === id && o.author === vote.provider && o.kind !== 'parsing_failure');
-      if (objection) { objection.authorStatus = 'confirmed_resolved'; objection.authorResolutionReason = 'Original author explicitly confirmed this specific objection resolved in a valid final ballot (overall verdict may still dissent).'; }
+      if (objection) recordAuthorSignoff(objection, draftSha256, 'Original author explicitly confirmed this specific objection resolved in a valid final ballot (overall verdict may still dissent).');
     }
     for (const supersession of vote.supersessions ?? []) {
       const old = session.objections.find((o) => o.id === supersession.oldObjectionId && o.author === vote.provider);
@@ -310,14 +336,19 @@ function applyAuthorResolutions(session: DebateSession, valid: ConsensusVote[]):
 }
 function determine(session: DebateSession, state: ConsensusState): void {
   const participants = session.request.providers;
-  const valid = state.votes.filter((v) => v.status === 'fulfilled');
-  // Even an incomplete vote must retain the full unresolved objection ledger.
-  applyAuthorResolutions(session, valid);
+  const valid = state.votes.filter((v) => v.status === 'fulfilled' &&
+    v.draftSha256 === state.draft?.sha256 && !!v.verdict);
+  const completeBallots = valid.length === participants.length &&
+    new Set(valid.map((v) => v.provider)).size === participants.length;
+  // A partial/invalid set of ballots never changes authoritative author sign-offs.
+  if (completeBallots && state.draft?.sha256) {
+    applyAuthorResolutions(session, valid, state.draft.sha256);
+  }
   const unresolved = session.objections.filter((o) => isCritical(o) &&
     (o.kind === 'parsing_failure' || (o.authorStatus !== 'confirmed_resolved' && o.authorStatus !== 'superseded')));
   state.unresolvedCriticalObjectionIds = unresolved.map((o) => o.id);
   state.blockingObjectionIds = state.policy.blockCritical ? [...state.unresolvedCriticalObjectionIds] : [];
-  if (valid.length !== participants.length || new Set(valid.map((v) => v.provider)).size !== participants.length) {
+  if (!completeBallots) {
     state.status = 'incomplete';
     state.reason = 'Some selected models did not provide valid independent votes. No quorum is inferred from missing votes.';
     return;
@@ -385,10 +416,11 @@ function parseVote(raw: string, provider: ProviderId, session: DebateSession, dr
 async function clarifyContradictions(
   session: DebateSession, state: ConsensusState, adapters: ReadonlyMap<string, AgentAdapter>,
   publish: DebatePublisher, signal: AbortSignal, deadlineMs?: number,
+  negotiationCycle?: number,
 ): Promise<void> {
   const bad = state.votes.filter(v => v.status === 'rejected' && v.error?.startsWith('Contradictory accept ballot:'));
   if (!bad.length || signal.aborted) return;
-  state.clarificationAttempts = [];
+  state.clarificationAttempts ??= [];
   session.phase = 'clarification';
   await notify(session, publish, 'stage', 'clarification');
   for (const original of bad) {
@@ -400,12 +432,15 @@ async function clarifyContradictions(
     const start = performance.now();
     const basePrompt = makeVotePrompt(session, original.provider, state.draft);
     const prompt = 'Stage: CONSENSUS CLARIFICATION. Your earlier vote was rejected because it said accept but disclaimed confirmation of an important issue. Explicitly reconsider whether to vote conditional/reject, or unconditionally accept with no remaining concerns. Do not claim to have seen evidence omitted from the provided context.\n' + basePrompt;
-    session.calls++;
+    if (negotiationCycle === undefined) session.calls++;
     let corrected: ConsensusVote;
     try {
       const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs('vote', session.request.maxRounds),
         deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
-      const raw = await adapter.propose(prompt, signal, { timeoutMs });
+      const raw = negotiationCycle === undefined
+        ? await adapter.propose(prompt, signal, { timeoutMs })
+        : await negotiateCall(session, state, negotiationCycle, 'clarification',
+          original.provider, prompt, adapters, publish, signal, deadlineMs);
       if (signal.aborted) throw new Error('Cancelled');
       corrected = parseVote(raw, original.provider, session, state.draft, prompt, Math.round(performance.now() - start));
     } catch (error) {
@@ -473,8 +508,7 @@ async function resolveOpenObjections(
         const objection = session.objections.find(o => o.id === item.objectionId &&
           o.author === author && o.kind !== 'parsing_failure');
         if (objection) {
-          objection.authorStatus = 'confirmed_resolved';
-          objection.authorResolutionReason = 'Original author final-resolution signoff: ' + item.reason;
+          recordAuthorSignoff(objection, state.draft.sha256!, 'Original author final-resolution signoff: ' + item.reason);
         }
       }
     } catch (error) { attempt.error = safeError(error); }
@@ -521,16 +555,38 @@ async function negotiateCall(
     throw error;
   }
 }
-function negotiationRevisionPrompt(state: ConsensusState, author: ProviderId, packed: ContextPack): string {
+/** An explicit, ranked per-provider action plan: author-owned open critical IDs,
+ * then other open critical objections, then remaining open issues.
+ * The full shared M4.2 ledger is still supplied to every model.
+ */
+function negotiationTargets(session: DebateSession, provider: ProviderId): DebateObjection[] {
+  return session.objections.filter(o =>
+    o.kind !== 'parsing_failure' && o.authorStatus !== 'confirmed_resolved' &&
+    o.authorStatus !== 'superseded')
+    .sort((a, b) => {
+      const rank = (o: DebateObjection) =>
+        (isCritical(o) ? 0 : 2) + (o.author === provider ? 0 : 1);
+      return rank(a) - rank(b) || a.id.localeCompare(b.id);
+    }).slice(0, 18);
+}
+function negotiationRevisionPrompt(session: DebateSession, state: ConsensusState,
+  author: ProviderId, packed: ContextPack): string {
   const feedback = state.votes.map(v => ({
     provider: v.provider, verdict: v.verdict ?? 'invalid',
     concerns: v.concerns.slice(0, 8), rationale: bounded(v.rationale ?? '', 500),
   }));
+  const priority = negotiationTargets(session, author).map(o => ({
+    id: o.id, ownedByYou: o.author === author, severity: o.severity,
+    claimExcerpt: bounded(o.claim, 160),
+    criticismExcerpt: bounded(o.criticism, 220),
+  }));
   return 'Stage: M5 TARGETED NEGOTIATION REVISION. This is NOT a vote. You are ' + author + '.\n' +
-    'The prior independent vote did not establish consensus. Address the concrete open issues without erasing dissent. ' +
-    'Original author sign-off is required for objection closure; do not claim any objection is resolved merely by editing.\n' +
+    'Address the ranked action-plan objections with the SMALLEST meaningful design change, ' +
+    'without hiding remaining dissent or inventing independent evidence. Do not rewrite unrelated sections. ' +
+    'Only the original author can confirm resolution; priority IDs are NOT automatically resolved.\n' +
     'Return ONLY JSON {"proposal":"full, implementable Markdown proposal","tradeoffs":["explicit unresolved decision"],"addressedObjectionIds":["exact IDs attempted"]}. ' +
-    'The objection records below are SHORT EXCERPTS and have not been independently fact checked. Never fabricate source access.\n' +
+    'All objection text is a SHORT EXCERPT; do not invent missing source context.\n' +
+    '<priority_action_plan>\n' + JSON.stringify(priority) + '\n</priority_action_plan>\n' +
     '<original_draft>\n' + bounded(state.draft?.proposal ?? '', MAX_DRAFT) + '\n</original_draft>\n' +
     '<independent_vote_feedback>\n' + JSON.stringify(feedback) + '\n</independent_vote_feedback>\n' +
     '<related_objection_groups_advisory>\n' + JSON.stringify((state.objectionGroups ?? []).filter(g => g.objectionIds.length > 1)) + '\n</related_objection_groups_advisory>\n' +
@@ -567,11 +623,29 @@ async function executeNegotiationCycle(
   };
   state.negotiationHistory ??= [];
   state.negotiationHistory.push(cycle);
-  const requiredCalls = participants.length * 2 + 1;
-  if (session.calls + requiredCalls > (session.request.maxCalls ?? 40) ||
-      signal.aborted || (deadlineMs !== undefined && Date.now() >= deadlineMs)) {
+  const signoffAuthors = new Set(session.objections.filter(o => isCritical(o) &&
+    o.kind !== 'parsing_failure' && o.authorStatus !== 'confirmed_resolved' &&
+    o.authorStatus !== 'superseded').map(o => o.author));
+  // Plan for new independent ballots AND one corrective clarification per
+  // provider AND a final original-author review of every open critical issue.
+  // Only calls actually made are metered; the other slots are protected.
+  const negotiationCalls = participants.length * 2 + 1;
+  const reserveCalls = negotiationCalls + participants.length + signoffAuthors.size;
+  cycle.priorityObjectionIds = [...new Set(participants.flatMap(p =>
+    negotiationTargets(session, p).filter(o => isCritical(o)).map(o => o.id)))];
+  if (interrupted(signal, deadlineMs)) {
+    cycle.outcome = 'interrupted';
+    cycle.reason = 'Negotiation could not begin: cancelled or deadline expired. Previous votes remain historical.';
+    state.status = 'incomplete';
+    state.reason = cycle.reason;
+    await notify(session, publish, 'entry', 'negotiation');
+    return;
+  }
+  if (session.calls + reserveCalls > (session.request.maxCalls ?? 40)) {
     cycle.outcome = 'skipped';
-    cycle.reason = 'Insufficient budget or remaining time for a complete negotiation + independent re-vote (' + requiredCalls + ' calls required).';
+    cycle.reason = 'Insufficient budget for the complete ' + negotiationCalls +
+      '-call negotiation, up to ' + participants.length + ' clarification calls, and ' +
+      signoffAuthors.size + ' original-author confirmations (' + reserveCalls + ' slots required).';
     await notify(session, publish, 'entry', 'negotiation');
     return;
   }
@@ -582,10 +656,10 @@ async function executeNegotiationCycle(
   // run on DIFFERENT providers once the revised draft has been frozen.
   for (const author of participants) {
     if (signal.aborted || (deadlineMs !== undefined && Date.now() >= deadlineMs)) {
-      cycle.outcome = 'failed'; cycle.reason = 'Negotiation cancelled or timed out.';
-      state.status = 'incomplete'; return;
+      cycle.outcome = 'interrupted'; cycle.reason = 'Negotiation cancelled or timed out.';
+      state.status = 'incomplete'; state.reason = cycle.reason; return;
     }
-    const prompt = negotiationRevisionPrompt(state, author, shared);
+    const prompt = negotiationRevisionPrompt(session, state, author, shared);
     try {
       const raw = await negotiateCall(session, state, cycleNumber, 'targeted_revision', author,
         prompt, adapters, publish, signal, deadlineMs);
@@ -598,9 +672,12 @@ async function executeNegotiationCycle(
     } catch (error) {
       cycle.revisions.push({ provider: author, status: 'rejected', tradeoffs: [],
         error: safeError(error) });
-      cycle.outcome = 'failed';
-      cycle.reason = 'A targeted revision was not usable. Original draft/votes preserved; no re-vote conducted.';
-      state.status = cycle.priorStatus;
+      cycle.outcome = interrupted(signal, deadlineMs) ? 'interrupted' : 'failed';
+      cycle.reason = cycle.outcome === 'interrupted'
+        ? 'Targeted revision interrupted by cancellation or deadline. Earlier verdict preserved as history.'
+        : 'A targeted revision was not usable. Original draft/votes preserved; no re-vote conducted.';
+      state.status = cycle.outcome === 'interrupted' ? 'incomplete' : cycle.priorStatus;
+      if (cycle.outcome === 'interrupted') state.reason = cycle.reason;
       await notify(session, publish, 'entry', 'negotiation');
       return;
     }
@@ -618,9 +695,12 @@ async function executeNegotiationCycle(
       throw new Error('Invalid negotiated synthesis.');
     }
   } catch (error) {
-    cycle.outcome = 'failed';
-    cycle.reason = 'No valid new synthesis. Original draft/votes preserved; no re-vote conducted.';
-    state.status = cycle.priorStatus;
+    cycle.outcome = interrupted(signal, deadlineMs) ? 'interrupted' : 'failed';
+    cycle.reason = cycle.outcome === 'interrupted'
+      ? 'Negotiated synthesis interrupted by cancellation or deadline. Earlier verdict preserved as history.'
+      : 'No valid new synthesis. Original draft/votes preserved; no re-vote conducted.';
+    state.status = cycle.outcome === 'interrupted' ? 'incomplete' : cycle.priorStatus;
+    if (cycle.outcome === 'interrupted') state.reason = cycle.reason;
     await notify(session, publish, 'entry', 'negotiation');
     return;
   }
@@ -657,6 +737,9 @@ async function executeNegotiationCycle(
     return;
   }
   cycle.revisedDraftSha256 = candidate.sha256;
+  // The earlier draft's author sign-offs are not evidence about a changed draft.
+  reopenChangedDraftSignoffs(session, candidate.sha256);
+  await notify(session, publish, 'entry', 'negotiation');
   // The earlier frozen draft and every independent ballot remain snapshotted.
   // New votes only attach to the new SHA, never mix with previous ballots.
   state.draft = candidate;
@@ -688,14 +771,24 @@ async function executeNegotiationCycle(
     state.votes.push(vote);
     await notify(session, publish, 'entry', 'vote');
   }));
-  cycle.newVotes = structuredClone(state.votes);
-  cycle.outcome = 'completed';
-  if (signal.aborted) {
-    cycle.reason = 'Re-voting was interrupted; no quorum can be inferred.';
+  // Apply the same bounded contradictory-accept clarification used for the
+  // first frozen draft, never reusing a ballot from the previous SHA.
+  if (!interrupted(signal, deadlineMs)) {
+    await clarifyContradictions(session, state, adapters, publish, signal, deadlineMs, cycleNumber);
+  }
+  if (interrupted(signal, deadlineMs)) {
+    cycle.outcome = 'interrupted';
+    cycle.reason = 'Re-voting or clarification was interrupted; no quorum can be inferred.';
     state.status = 'incomplete';
+    state.reason = cycle.reason;
   } else {
     determine(session, state);
+    cycle.outcome = state.status === 'incomplete' ? 'partial' : 'completed';
+    if (cycle.outcome === 'partial') {
+      cycle.reason = 'One or more new ballots were invalid; earlier votes cannot fill missing quorum.';
+    }
   }
+  cycle.newVotes = structuredClone(state.votes);
   await notify(session, publish, 'entry', 'negotiation');
 }
 
@@ -711,7 +804,7 @@ export async function executeConsensus(
   const participants = session.request.providers;
   // A report must exist for ALL terminal outcomes, including not assessed, invalid draft, timeout and cancellation.
   try {
-    if (signal.aborted) {
+    if (interrupted(signal, deadlineMs)) {
       state.status = 'incomplete';
       state.reason = 'Session cancelled or timed out before a full independent consensus vote could be taken.';
       return;
@@ -850,8 +943,17 @@ export async function executeConsensus(
     }
   } catch (error) {
     state.status = 'incomplete';
-    state.reason = signal.aborted ? 'Consensus interrupted.' : safeError(error);
+    state.reason = interrupted(signal, deadlineMs) ? 'Consensus interrupted.' : safeError(error);
   } finally {
+    if (interrupted(signal, deadlineMs) && state.negotiationHistory?.length) {
+      const current = state.negotiationHistory.at(-1)!;
+      if (current.outcome === 'running') {
+        current.outcome = 'interrupted';
+        current.reason = 'Execution cancelled or deadline expired before cycle completion.';
+      }
+      state.status = 'incomplete';
+      state.reason = 'Consensus negotiation interrupted. Earlier votes are preserved only as history.';
+    }
     // Ensure critical objections are never omitted even for failed/partial/no-vote reports.
     if (!['unanimous', 'qualified', 'disputed', 'blocked', 'blocked_by_unparseable_evidence'].includes(state.status)) {
       state.unresolvedCriticalObjectionIds = session.objections.filter((o) => isCritical(o) &&
