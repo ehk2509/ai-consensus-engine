@@ -105,7 +105,7 @@ export interface ConsensusState {
   objectionGroups?: ObjectionGroup[];
   /** Every model call used for follow-up remains visible; original votes are not silently overwritten. */
   clarificationAttempts?: ConsensusVote[];
-  resolutionAttempts?: Array<{ provider: ProviderId; objectionIds: string[]; decisions: Array<{ objectionId: string; resolved: boolean; reason: string }>; rawResponse?: string; error?: string }>;
+  resolutionAttempts?: Array<{ provider: ProviderId; objectionIds: string[]; draftSha256?: string; decisions: Array<{ objectionId: string; resolved: boolean; reason: string }>; rawResponse?: string; error?: string }>;
   contextOmittedCriticalIds?: string[];
   /** One shared objection set for synthesis and every ballot, instead of different per-voter coverage. */
   objectionCoverage?: { included: number; total: number; omitted: number; omittedCritical: number; contextSha256: string; excerpted: true };
@@ -294,6 +294,20 @@ ${state.negotiationHistory?.length ? state.negotiationHistory.map(cycle =>
 
 ${state.negotiationCalls?.length ? 'M5 provider-call journal (issued before each CLI): ' +
   state.negotiationCalls.map(call => call.cycle + '/' + call.role + '/' + call.provider + '=' + call.status + ' (' + call.id + ')').join('; ') : 'No M5 provider calls made.'}
+
+## Durable recovery audit (M5.2)
+
+${session.recoveryHistory?.length ? session.recoveryHistory.map(item =>
+  '- Attempt ' + item.attempt + ' (' + item.kind + ') at ' + item.at +
+  '; explicitly authorized call IDs: ' + (item.authorizedCallIds.join(', ') || 'none')).join('\n') :
+  'No operator-approved recovery attempts recorded.'}
+
+${state.callJournal?.length ? state.callJournal.map(call =>
+  '- ' + call.stage + ' / ' + call.provider + ' / ' + call.id +
+  ': ' + call.status + (call.retryAuthorized ? ' (operator authorized retry)' : '') +
+  '; frozen draft: ' + (call.frozenDraftSha256 ?? 'not yet drafted') +
+  '; prompt SHA-256: ' + call.promptSha256).join('\n') :
+  'No M5.2 initial consensus call journal records.'}
 
 ## Follow-up audit
 
@@ -485,7 +499,7 @@ async function resolveOpenObjections(
     o.authorStatus !== 'confirmed_resolved' && o.authorStatus !== 'superseded');
   if (!pending.length || !state.draft || signal.aborted) return;
   const authors = [...new Set(pending.map(o => o.author))];
-  state.resolutionAttempts = [];
+  state.resolutionAttempts ??= [];
   session.phase = 'resolution';
   await notify(session, publish, 'stage', 'resolution');
   for (const author of authors) {
@@ -497,11 +511,16 @@ async function resolveOpenObjections(
       state.contextOmittedCriticalIds = [...new Set([...(state.contextOmittedCriticalIds ?? []), ...packed.omittedCriticalIds])];
       continue;
     }
+    // A complete original-author response for this exact frozen draft is final,
+    // even if its answer was "unresolved". Never rebill the author to get agreement.
+    if (state.resolutionAttempts.some(a => a.provider === author &&
+      a.draftSha256 === state.draft?.sha256 && !a.error &&
+      own.every(o => a.decisions.some(d => d.objectionId === o.id)))) continue;
     const prompt = 'Stage: FINAL OBJECTION RESOLUTION. You are the ORIGINAL AUTHOR of the objections listed below. Review the FROZEN draft, not other votes. Return ONLY JSON {"decisions":[{"objectionId":"exact ID","resolved":true|false,"reason":"specific rationale with reference to the draft"}]}. Respond to EACH supplied ID. Mark resolved only when the exact concern has demonstrably been addressed; otherwise false. Never sign off on parsing-failure evidence or invent IDs.\n' +
       '<frozen_draft>\n' + bounded(state.draft.proposal, MAX_DRAFT) + '\n</frozen_draft>\n' +
       '<authored_open_objections>\n' + packed.text + '\n</authored_open_objections>';
     const attempt: NonNullable<ConsensusState['resolutionAttempts']>[number] = {
-      provider: author, objectionIds: [...packed.includedIds], decisions: [],
+      provider: author, objectionIds: [...packed.includedIds], draftSha256: state.draft.sha256, decisions: [],
     };
     state.resolutionAttempts.push(attempt);
     try {
@@ -572,9 +591,9 @@ async function negotiateCall(
       deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
     const raw = await adapter.propose(prompt, signal, { timeoutMs });
     if (signal.aborted || !raw.trim()) throw new Error('Negotiation call cancelled or empty.');
-    record.status = 'fulfilled';
+    record.status = raw.length <= 40000 ? 'fulfilled' : 'rejected';
     record.rawResponse = raw.length <= 40000 ? raw : undefined;
-    if (raw.length > 40000) record.error = 'Result too large for durable replay; only committed stage state can be resumed.';
+    if (raw.length > 40000) record.error = 'Result too large for durable replay. An explicit retry is needed if stage output was not committed.';
     await notify(session, publish, 'entry', 'negotiation');
     return raw;
   } catch (error) {
@@ -635,9 +654,9 @@ async function invokeInitialConsensus(
       deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
     const raw = await adapter.propose(prompt, signal, { timeoutMs });
     if (interrupted(signal, deadlineMs) || !raw.trim()) throw new Error('Provider returned no complete response.');
-    record.status = 'fulfilled';
+    record.status = raw.length <= 40000 ? 'fulfilled' : 'rejected';
     record.rawResponse = raw.length <= 40000 ? raw : undefined;
-    if (raw.length > 40000) record.error = 'Full response exceeded durable replay size; stage state must have been committed to resume.';
+    if (raw.length > 40000) record.error = 'Response exceeds durable replay limit; retry requires operator authorization unless the parsed artifact was committed.';
     await notify(session, publish, 'entry', stage === 'synthesis' ? 'synthesis' : 'vote');
     return raw;
   } catch (error) {

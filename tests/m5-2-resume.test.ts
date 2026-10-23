@@ -91,6 +91,8 @@ test('M5.2 explicitly retries failed final revision in a partial debate, retaini
     assert.equal(done.status,'completed');
     assert.equal(done.consensus?.status,'disputed');
     assert.equal(done.recovery?.kind,'debate');
+    assert.equal(done.recoveryHistory?.length,1);
+    assert.deepEqual(done.recoveryHistory?.[0]?.authorizedCallIds,[failed.id]);
     assert.equal(revisionCalls,1);
     assert.equal(proposalCalls,0);
     assert.ok([...previousIds].every(id=>done.entries.some(e=>e.id===id&&e.status==='fulfilled')));
@@ -129,6 +131,7 @@ test('M5.2 resumes incomplete consensus voting, preserving valid ballots and exa
     assert.equal(resumed.statusCode,202);
     const done=await completed(app,session.id);
     assert.equal(done.consensus?.status,'unanimous');
+    assert.match(done.consensus?.reportMarkdown ?? '',/Durable recovery audit \(M5.2\)/);
     assert.equal(done.consensus?.draft?.sha256,sha);
     assert.equal(voteCalls,1);
     assert.equal(synthesisCalls,0);

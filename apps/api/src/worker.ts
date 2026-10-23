@@ -111,8 +111,10 @@ export class DurableDebateWorker {
         !recoverConsensus && !recoverPartialDebate) {
       return conflict('Only interrupted work, unfinished consensus, or an explicitly retried partial debate can resume. Finished verified outcomes are immutable.');
     }
+    const reviewInterrupted = session.status === 'cancelled' && !!consensus?.callJournal?.some(c =>
+      c.stage === 'resolution' && c.status === 'issued');
     if (consensus && ['unanimous', 'qualified', 'disputed', 'blocked', 'blocked_by_unparseable_evidence'].includes(consensus.status) &&
-        !['running', 'interrupted', 'queued'].includes(session.status)) {
+        !['running', 'interrupted', 'queued'].includes(session.status) && !reviewInterrupted) {
       return conflict('The recorded consensus decision is final. Create a new debate to re-evaluate it.');
     }
     // Pre-M4.2 stored work might lack a persisted deadline. Derive one
@@ -153,12 +155,19 @@ export class DurableDebateWorker {
         if (item.stage === 'vote') return !consensus?.votes.some(v =>
           v.provider === item.provider && v.status === 'fulfilled' &&
           v.draftSha256 === (item as import('../../../packages/core/src/consensus.ts').ConsensusCall).frozenDraftSha256);
-        return false; // A failed optional clarification/resolution is not a mandatory checkpoint.
+        if (item.stage === 'clarification') return !!consensus?.votes.some(v =>
+          v.provider === item.provider && v.status === 'rejected' &&
+          v.error?.startsWith('Contradictory accept ballot:'));
+        if (item.stage === 'resolution') return session.status === 'cancelled';
+        return false;
       }
       const cycle = consensus?.negotiationHistory?.find(c => c.number === item.cycle);
       if (item.role === 'targeted_revision') return !cycle?.revisions.some(r =>
         r.provider === item.provider && r.status === 'fulfilled');
       if (item.role === 're_synthesis') return !cycle?.revisedDraftSha256;
+      if (item.role === 'clarification') return !!consensus?.votes.some(v =>
+        v.provider === item.provider && v.status === 'rejected' &&
+        v.error?.startsWith('Contradictory accept ballot:'));
       if (item.role === 're_vote') return !consensus?.votes.some(v =>
         v.provider === item.provider && v.status === 'fulfilled' &&
         v.draftSha256 === cycle?.revisedDraftSha256);
@@ -206,6 +215,11 @@ export class DurableDebateWorker {
       kind: recoverConsensus ? 'consensus' : 'debate',
       at: new Date().toISOString(), authorizedCallIds: [...requested],
     };
+    session.recoveryHistory ??= [];
+    session.recoveryHistory.push({
+      attempt: session.recovery.attempts, at: session.recovery.at,
+      kind: session.recovery.kind, authorizedCallIds: [...requested],
+    });
     this.counters.uncertain += mandatory.filter(e => requested.has(e.id)).length;
     session.status = 'queued';
     session.phase = null;

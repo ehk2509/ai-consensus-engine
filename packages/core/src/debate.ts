@@ -90,6 +90,8 @@ export interface DebateSession {
   events: DebateEvent[];
   /** Explicit operator-authorized checkpoint recovery; historical evidence is never reset. */
   recovery?: { attempts: number; kind: 'debate' | 'consensus'; at: string; authorizedCallIds: string[] };
+  /** Append-only operator recovery approvals and chosen call identities. */
+  recoveryHistory?: Array<{ attempt: number; at: string; kind: 'debate' | 'consensus'; authorizedCallIds: string[] }>;
   error?: string;
 }
 
