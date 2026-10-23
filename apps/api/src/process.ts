@@ -20,7 +20,7 @@ export interface ProcessSpec {
 
 /** Prevent handing the council's own API credential to external provider CLIs and hooks. */
 function providerEnvironment(): NodeJS.ProcessEnv {
-  const env = { ...process.env, CI: 'true', NO_COLOR: '1' };
+  const env: NodeJS.ProcessEnv = { ...process.env, CI: 'true', NO_COLOR: '1' };
   delete env.ACE_API_TOKEN;
   delete env.ACE_TOKEN_FILE;
   delete env.ACE_DATA_DIR;
