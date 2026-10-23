@@ -136,29 +136,35 @@ export interface ContextPack {
   omittedIds: string[];
   omittedCriticalIds: string[];
 }
+export const isOpenCriticalObjection = (o: DebateObjection): boolean =>
+  (o.severity === 'high' || o.severity === 'unspecified') &&
+  (o.kind === 'parsing_failure' || (o.authorStatus !== 'confirmed_resolved' && o.authorStatus !== 'superseded'));
 const critical = (o: DebateObjection) => o.severity === 'high' || o.severity === 'unspecified';
 /** JSON stays parseable: NEVER truncate the serialized JSON text in the middle of an objection. */
 export function packObjections(
   objections: readonly DebateObjection[], maxChars: number,
 ): ContextPack {
   const prioritized = [...objections].sort((a, b) =>
-    Number(critical(b) && b.authorStatus !== 'confirmed_resolved' && b.authorStatus !== 'superseded') -
-    Number(critical(a) && a.authorStatus !== 'confirmed_resolved' && a.authorStatus !== 'superseded') ||
+    Number(isOpenCriticalObjection(b)) - Number(isOpenCriticalObjection(a)) ||
     Number(critical(b)) - Number(critical(a)) ||
     b.round - a.round || a.id.localeCompare(b.id));
   const records: Item[] = [], includedIds: string[] = [], omittedIds: string[] = [], omittedCriticalIds: string[] = [];
   for (const o of prioritized) {
     const item = {
       id: o.id, round: o.round, author: o.author, target: o.target, severity: o.severity,
-      kind: o.kind ?? 'substantive', claim: short(o.claim, 340),
-      criticism: short(o.criticism, 520), resolution: o.resolution,
+      kind: o.kind ?? 'substantive',
+      // Compact, labeled excerpts keep *all* critical IDs and the largest possible
+      // number of noncritical records within a bounded shared review context.
+      // Do not imply that an excerpt reproduces the full original criticism.
+      claim: short(o.claim, critical(o) ? 125 : 85),
+      criticism: short(o.criticism, critical(o) ? 205 : 105),
       authorStatus: o.authorStatus ?? 'open',
     };
     if (JSON.stringify([...records, item]).length <= maxChars) {
       records.push(item); includedIds.push(o.id);
     } else {
       omittedIds.push(o.id);
-      if (critical(o) && o.authorStatus !== 'confirmed_resolved' && o.authorStatus !== 'superseded') omittedCriticalIds.push(o.id);
+      if (isOpenCriticalObjection(o)) omittedCriticalIds.push(o.id);
     }
   }
   return { text: JSON.stringify(records), includedIds, omittedIds, omittedCriticalIds };

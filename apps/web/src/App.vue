@@ -360,6 +360,7 @@ onBeforeUnmount(closeStream);
             <p class="muted">{{ debate.consensus.reason || 'The council is evaluating the shared draft.' }}</p>
             <p class="muted">Consensus records model judgments, not externally verified facts. The facilitator's self-authored vote is identified and cannot alone satisfy the non-author acceptance requirement.</p>
             <p class="muted">Quorum: {{ debate.consensus.policy.quorum.replace('_', '-') }} · Critical objection gate: {{ debate.consensus.policy.blockCritical ? 'Enabled' : 'Disabled' }} · {{ debate.consensus.votes.length }} ballots</p>
+            <p v-if="debate.consensus.objectionCoverage" class="muted">Shared objection context: {{ debate.consensus.objectionCoverage.included }}/{{ debate.consensus.objectionCoverage.total }} records included as excerpts · {{ debate.consensus.objectionCoverage.omitted }} omitted, including {{ debate.consensus.objectionCoverage.omittedCritical }} critical. Synthesis and ballots use the same global ledger (SHA-256: {{ debate.consensus.objectionCoverage.contextSha256.slice(0, 12) }}…).</p>
             <p v-if="debate.consensus.contextOmittedCriticalIds?.length" class="warning">{{ debate.consensus.contextOmittedCriticalIds.length }} critical objections could not fit into model context. Consensus cannot be verified.</p>
             <p v-if="debate.consensus.status === 'blocked_by_unparseable_evidence'" class="warning">Parsing/incomplete-source evidence prevents final consensus. This is not the same as a substantive disagreement.</p>
             <div v-if="debate.consensus.clarificationAttempts?.length || debate.consensus.resolutionAttempts?.length" class="resolution-audit"><strong>Final reconciliation audit</strong><p class="muted">Clarifications: {{ debate.consensus.clarificationAttempts?.length ?? 0 }} · Original-author sign-off attempts: {{ debate.consensus.resolutionAttempts?.length ?? 0 }} · All follow-up calls count toward the session budget.</p><details v-for="(attempt, i) in debate.consensus.resolutionAttempts ?? []" :key="i"><summary>{{ labels[attempt.provider] }} · {{ attempt.decisions.length }}/{{ attempt.objectionIds.length }} objections answered</summary><p v-if="attempt.error" class="warning">{{ attempt.error }}</p><p v-for="item in attempt.decisions" :key="item.objectionId" class="muted">{{ item.objectionId }} · {{ item.resolved ? 'Resolved by author' : 'Still open' }}: {{ item.reason }}</p></details></div>
@@ -416,6 +417,6 @@ onBeforeUnmount(closeStream);
         <p class="side-note">Debates are stored locally in <code>.ace-data/debates</code>. The app does not save your CLI account credentials.</p>
       </aside>
     </div>
-    <footer>Local-first M3 · Independent voting and traceable consensus · Evidence claims remain unverified</footer>
+    <footer>Local-first M4 · Independent voting and traceable consensus · Evidence claims remain unverified</footer>
   </main>
 </template>
