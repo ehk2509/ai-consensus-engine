@@ -17,6 +17,10 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: M4 hardening isolation checks
         run: timeout --signal=TERM --kill-after=5s 75s node --experimental-strip-types --test tests/m4-hardening.test.ts
+      - name: M4 crash-file isolation
+        run: timeout --signal=TERM --kill-after=5s 35s node --experimental-strip-types --test tests/m4-crash.test.ts
+      - name: M4 durable-file isolation
+        run: timeout --signal=TERM --kill-after=5s 35s node --experimental-strip-types --test tests/m4-durable.test.ts
       - name: Unit tests
         run: timeout --signal=TERM --kill-after=5s 180s npm test
       - name: Typecheck
