@@ -113,6 +113,15 @@ const MAX_DRAFT = 18000;
 const MAX_RAW = 15000;
 const MAX_OBJECTION_IDS = 144;
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+/** Sign-off identity covers the whole voted-on decision, not just its prose.
+ * Changing assumptions or evidence is also a new frozen draft.
+ */
+function draftHash(draft: ConsensusDraft): string {
+  return hash(JSON.stringify({
+    author: draft.author, proposal: draft.proposal, assumptions: draft.assumptions,
+    evidence: draft.evidence,
+  }));
+}
 const bounded = (text: string, limit: number): string =>
   text.trim().length <= limit ? text.trim() : text.trim().slice(0, limit) + '\n[Context truncated]';
 function parseJSON(text: string): Record<string, unknown> | null {
@@ -628,7 +637,7 @@ async function executeNegotiationCycle(
   const participants = session.request.providers;
   const cycle: NegotiationCycle = {
     number: cycleNumber, outcome: 'running', priorStatus: state.status,
-    originalDraftSha256: state.draft.sha256 ?? hash(state.draft.proposal),
+    originalDraftSha256: state.draft.sha256 ?? draftHash(state.draft),
     previousDraft: structuredClone(state.draft), previousVotes: structuredClone(state.votes), revisions: [],
   };
   state.negotiationHistory ??= [];
@@ -739,7 +748,7 @@ async function executeNegotiationCycle(
       relatedObjectionIds: strings(item.relatedObjectionIds, 32, 100).filter(id => knownIds.has(id)),
       remainingUncertainties: strings(item.remainingUncertainties, 8, 250),
     })) : [];
-  candidate.sha256 = hash(candidate.proposal);
+  candidate.sha256 = draftHash(candidate);
   if (candidate.sha256 === cycle.originalDraftSha256) {
     cycle.outcome = 'skipped';
     cycle.reason = 'Synthesized draft is byte-identical to the previous draft; cannot justify another ballot.';
@@ -884,7 +893,7 @@ export async function executeConsensus(
         })) : [],
       rawResponse: bounded(rawDraft, MAX_RAW), provenance: provenance(facilitator, draftPrompt),
     };
-    state.draft.sha256 = hash(state.draft.proposal);
+    state.draft.sha256 = draftHash(state.draft);
     await notify(session, publish, 'entry', 'synthesis');
     if (signal.aborted) {
       state.status = 'incomplete';

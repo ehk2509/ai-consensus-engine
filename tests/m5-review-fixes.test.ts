@@ -92,6 +92,30 @@ test('P0: explicit author re-confirmation signs only the revised hash and preser
   assert.ok(session.objections.every(o => o.authorSignoffs?.some(x => x.draftSha256 === revisedHash)));
 });
 
+test('P0: changing evidence or assumptions without changing proposal text still invalidates earlier author sign-offs', async () => {
+  const votesByProvider = new Map<ProviderId, number>();
+  const {session,calls} = await run((id,prompt,debate) => {
+    if (prompt.includes('Stage: M5 NEGOTIATED SYNTHESIS')) {
+      return JSON.stringify({proposal:oldDraft,
+        assumptions:['A newly added assumption must be validated'],
+        evidence:[{claim:'The pilot costs are unknown'}]});
+    }
+    if (prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')) {
+      const number = (votesByProvider.get(id) ?? 0) + 1;
+      votesByProvider.set(id, number);
+      return ballot('conditional', number === 1 ? debate.objections.filter(o=>o.author===id).map(o=>o.id) : []);
+    }
+    return reply(id,prompt);
+  });
+  const cycle = session.consensus!.negotiationHistory![0]!;
+  assert.equal(cycle.outcome,'completed');
+  assert.notEqual(cycle.originalDraftSha256,cycle.revisedDraftSha256);
+  assert.equal(session.consensus?.draft?.proposal,oldDraft);
+  assert.equal(calls.filter(c=>c.prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')).length,6);
+  assert.ok(session.objections.every(o=>o.authorStatus==='open'));
+  assert.ok(session.objections.every(o=>o.authorSignoffs?.some(x=>x.draftSha256===cycle.originalDraftSha256)));
+});
+
 test('P1: partial fresh ballot set does not sign off ANY objections, and cycle is partial', async () => {
   const {session} = await run((id,prompt,debate) => {
     if (prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE') && currentVote(prompt)) {
