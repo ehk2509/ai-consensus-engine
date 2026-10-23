@@ -88,6 +88,8 @@ export interface DebateSession {
   consensus?: ConsensusState;
   calls: number;
   events: DebateEvent[];
+  /** Explicit operator-authorized checkpoint recovery; historical evidence is never reset. */
+  recovery?: { attempts: number; kind: 'debate' | 'consensus'; at: string; authorizedCallIds: string[] };
   error?: string;
 }
 
@@ -358,8 +360,10 @@ export async function executeDebate(
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(1, deadlineMs - Date.now()));
   const signal = controller.signal;
   session.status = 'running';
+  const consensusRecovery = session.recovery?.kind === 'consensus';
   try {
     await notify(session, publisher, { type: 'started' });
+    if (!consensusRecovery) {
     await stage(session, publisher, 'proposal', 0, async () => {
       await Promise.all(session.request.providers.map((provider) =>
         perform(session, adapters, publisher, 'proposal', 0, provider, promptForProposal(session), undefined, signal, deadlineMs)));
@@ -394,14 +398,15 @@ export async function executeDebate(
             perform(session, adapters, publisher, 'revision', round, provider, promptForRevision(session, provider), undefined, signal, deadlineMs)));
         });
       }
-      session.status = session.entries.some((entry) => entry.status === 'skipped' && entry.error === 'Session call budget exhausted.') ? 'budget_exhausted' :
-        session.entries.some((entry) => entry.status === 'rejected' && !entry.retryAuthorized) ? 'partial' : 'completed';
+      session.status = session.entries.some((entry) => entry.status === 'skipped' && entry.error === 'Session call budget exhausted.' && !entry.retryAuthorized) ? 'budget_exhausted' :
+        session.entries.some((entry) => (entry.status === 'rejected' || (entry.status === 'uncertain' && !entry.retryAuthorized)) && !entry.retryAuthorized) ? 'partial' : 'completed';
+    }
     }
   } catch {
     session.status = 'failed';
     session.error = 'Debate could not complete. Check server logs and local storage.';
   }
-  session.debateStatus = session.status;
+  if (!consensusRecovery) session.debateStatus = session.status;
   if (session.request.consensus) {
     try {
       // Keep the SSE stream alive until final M3 voting and reporting finish.

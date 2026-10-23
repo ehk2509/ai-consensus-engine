@@ -42,7 +42,10 @@ export class DurableDebateWorker {
       for (const session of await this.store.listRecoverableQueued()) {
         // Queued sessions may contain successfully completed steps from an earlier
         // approved manual resume. They are safe if no unapproved intent remains.
-        if (!uncertainDebateEntries(session).length && !session.consensus) {
+        if (!uncertainDebateEntries(session).length &&
+            (!session.consensus || !!session.recovery) &&
+            ![...(session.consensus?.callJournal ?? []), ...(session.consensus?.negotiationCalls ?? [])]
+              .some(call => call.status === 'issued' && !call.retryAuthorized)) {
           this.store.activate(session.id);
           this.pending.push(session.id);
           this.counters.recoveredQueued++;
@@ -87,40 +90,96 @@ export class DurableDebateWorker {
    * The caller must explicitly name EVERY uncertain call ID and acknowledge the risk
    * of provider charge duplication if the prior call had reached the remote service.
    */
+  /** Explicit recovery is permitted only when every possibly invoked call can
+   * be identified. Old pre-M5.2 consensus states without a journal fail closed.
+   */
   async resume(
     id: string, retryIds: string[] = [], acknowledgeMayRepeatCall = false,
   ): Promise<{ status: 'queued'; id: string } | { status: 'conflict'; reason: string; uncertainCallIds?: string[] } | null> {
-    if (this.runningId === id || this.pending.includes(id)) return { status: 'conflict', reason: 'Session is already scheduled.' };
+    const conflict = (reason: string, uncertainCallIds: string[] = []) =>
+      ({ status: 'conflict' as const, reason, uncertainCallIds });
+    if (this.runningId === id || this.pending.includes(id)) return conflict('Session is already scheduled.');
     const session = await this.store.getPersisted(id);
     if (!session) return null;
-    if (!['running', 'interrupted', 'queued'].includes(session.status)) {
-      return { status: 'conflict', reason: 'Only interrupted or pending sessions can resume. Finished sessions are immutable.' };
+    const consensus = session.consensus;
+    const recoverConsensus = !!consensus &&
+      consensus.status !== 'not_assessed' &&
+      (session.debateStatus === 'completed' || session.status === 'completed');
+    const recoverPartialDebate = session.status === 'partial' &&
+      (!consensus || consensus.status === 'not_assessed');
+    if (!['running', 'interrupted', 'queued'].includes(session.status) &&
+        !recoverConsensus && !recoverPartialDebate) {
+      return conflict('Only interrupted work, unfinished consensus, or an explicitly retried partial debate can resume. Finished verified outcomes are immutable.');
     }
-    if (session.consensus) {
-      return { status: 'conflict', reason: 'A crashed consensus-stage call cannot yet be safely reconstructed; create a new run. No model call was replayed.' };
+    if (consensus && ['unanimous', 'qualified', 'disputed', 'blocked', 'blocked_by_unparseable_evidence'].includes(consensus.status) &&
+        !['running', 'interrupted', 'queued'].includes(session.status)) {
+      return conflict('The recorded consensus decision is final. Create a new debate to re-evaluate it.');
     }
-    const uncertain = uncertainDebateEntries(session);
+    const deadline = Date.parse(session.executionDeadlineAt ?? '');
+    if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+      return conflict('The original session deadline has expired; resuming cannot extend it. Start a new run.');
+    }
+    if (session.calls >= (session.request.maxCalls ?? 40)) return conflict('The original model-call budget has been exhausted.');
+    const debateCalls = uncertainDebateEntries(session);
+    const ledger = [...(consensus?.callJournal ?? []), ...(consensus?.negotiationCalls ?? [])];
+    const unknown = ledger.filter(c => c.status === 'issued' && !c.retryAuthorized);
+    const rejected = ledger.filter(c => c.status === 'rejected' && !c.retryAuthorized);
+    if (consensus && consensus.status !== 'not_assessed' && !consensus.callJournal?.length &&
+        (consensus.draft || consensus.votes.length) &&
+        !consensus.negotiationHistory?.length) {
+      return conflict('Legacy consensus has no call journal. Its in-flight provider calls cannot be reconstructed safely.');
+    }
+    if (consensus?.negotiationHistory?.some(c => c.outcome === 'running' || c.outcome === 'interrupted') &&
+        !consensus.negotiationCalls?.length) {
+      return conflict('Negotiation lacks a durable provider-call journal; unsafe to resume.');
+    }
+    const failedDebate = session.entries.filter(e => (e.status === 'rejected' || e.status === 'skipped') && !e.retryAuthorized);
     const requested = new Set(retryIds);
-    if (uncertain.length) {
-      if (!acknowledgeMayRepeatCall || uncertain.some(entry => !requested.has(entry.id)) ||
-          [...requested].some(key => !uncertain.some(entry => entry.id === key))) {
-        return {
-          status: 'conflict', reason: 'External call outcome is unknown. Explicitly acknowledge potential duplicate billing and list all uncertain call IDs.',
-          uncertainCallIds: uncertain.map(entry => entry.id),
-        };
-      }
-      if (session.calls + uncertain.length > (session.request.maxCalls ?? 40)) {
-        return { status: 'conflict', reason: 'Call budget cannot cover explicitly authorized repeats.' };
-      }
-      for (const entry of uncertain) {
-        entry.status = 'uncertain';
-        entry.retryAuthorized = true;
-        entry.error = 'Outcome unknown; operator explicitly authorized a new call that may duplicate earlier provider usage.';
-      }
-      this.counters.uncertain += uncertain.length;
-    } else if (retryIds.length || acknowledgeMayRepeatCall) {
-      return { status: 'conflict', reason: 'No uncertain calls exist to retry.' };
+    const candidates = [...debateCalls, ...failedDebate, ...unknown, ...rejected];
+    const candidateIds = new Set(candidates.map(e => e.id));
+    const mandatory = [...debateCalls, ...unknown];
+    if (mandatory.some(e => !requested.has(e.id))) {
+      return conflict('Uncertain provider calls need exact IDs and explicit duplicate-charge authorization.',
+        mandatory.map(e => e.id));
     }
+    if ([...requested].some(id => !candidateIds.has(id))) {
+      return conflict('A retry ID does not identify a pending, rejected, or uncertain call.');
+    }
+    if (requested.size && !acknowledgeMayRepeatCall) {
+      return conflict('Explicitly acknowledge possible repeated provider calls and list their IDs.', [...requested]);
+    }
+    if (recoverPartialDebate && ![...requested].some(id => failedDebate.some(e => e.id === id))) {
+      return conflict('Partial debate recovery requires explicit retry of at least one failed or skipped stage.',
+        failedDebate.map(e => e.id));
+    }
+    if (session.calls + requested.size > (session.request.maxCalls ?? 40)) {
+      return conflict('Not enough model-call budget to cover requested repeats.');
+    }
+    // Replaying a critique after the rebuttal/revision already ran would require
+    // invalidating downstream evidence and author sign-offs: never do this silently.
+    for (const entry of failedDebate.filter(e => requested.has(e.id))) {
+      const dependent = session.entries.some(e => e.status === 'fulfilled' &&
+        (entry.phase === 'proposal' && ['critique', 'rebuttal', 'revision'].includes(e.phase) ||
+        entry.phase === 'critique' && e.round >= entry.round && ['rebuttal', 'revision'].includes(e.phase) ||
+        entry.phase === 'rebuttal' && e.provider === entry.provider && e.round >= entry.round && e.phase === 'revision' ||
+        entry.phase === 'revision' && e.round > entry.round));
+      if (dependent) return conflict('Failed stage has successful downstream work. Replaying would invalidate evidence; start a new run.');
+    }
+    for (const item of candidates) {
+      if (requested.has(item.id)) item.retryAuthorized = true;
+    }
+    if (recoverConsensus && !consensus?.callJournal?.length && !consensus?.negotiationCalls?.length && consensus?.draft) {
+      return conflict('Consensus has no recoverable journaled calls.');
+    }
+    if (recoverConsensus && !consensus?.draft && !consensus?.callJournal?.length) {
+      return conflict('Initial synthesis was not journaled; cannot prove whether a call was charged.');
+    }
+    session.recovery = {
+      attempts: (session.recovery?.attempts ?? 0) + 1,
+      kind: recoverConsensus ? 'consensus' : 'debate',
+      at: new Date().toISOString(), authorizedCallIds: [...requested],
+    };
+    this.counters.uncertain += mandatory.filter(e => requested.has(e.id)).length;
     session.status = 'queued';
     session.phase = null;
     session.finishedAt = undefined;

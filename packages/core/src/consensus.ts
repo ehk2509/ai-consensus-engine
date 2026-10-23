@@ -57,9 +57,15 @@ export interface NegotiationCall {
   provider: ProviderId;
   promptSha256: string;
   status: 'issued' | 'fulfilled' | 'rejected';
+  retryAuthorized?: boolean;
   createdAt: string;
   rawResponse?: string;
   error?: string;
+}
+/** Write-ahead journal for initial synthesis/votes, distinct from M5 calls. */
+export interface ConsensusCall extends NegotiationCall {
+  stage: 'synthesis' | 'vote' | 'clarification' | 'resolution';
+  frozenDraftSha256?: string;
 }
 export interface NegotiationDecision {
   issue: string;
@@ -93,6 +99,8 @@ export interface ConsensusState {
   /** Complete M5 negotiation cycles, with all earlier ballots and draft hashes. */
   negotiationHistory?: NegotiationCycle[];
   negotiationCalls?: NegotiationCall[];
+  /** Each initial provider call has a durable intent and response; required for safe resume. */
+  callJournal?: ConsensusCall[];
   /** Conservative similarity groups for review only; exact objection IDs remain authoritative. */
   objectionGroups?: ObjectionGroup[];
   /** Every model call used for follow-up remains visible; original votes are not silently overwritten. */
@@ -455,7 +463,8 @@ async function clarifyContradictions(
       const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs('vote', session.request.maxRounds),
         deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
       const raw = negotiationCycle === undefined
-        ? await adapter.propose(prompt, signal, { timeoutMs })
+        ? await invokeInitialConsensus(session, state, 'clarification', original.provider,
+          prompt, adapters, publish, signal, deadlineMs, state.draft.sha256)
         : await negotiateCall(session, state, negotiationCycle, 'clarification',
           original.provider, prompt, adapters, publish, signal, deadlineMs);
       if (signal.aborted) throw new Error('Cancelled');
@@ -498,13 +507,9 @@ async function resolveOpenObjections(
       provider: author, objectionIds: [...packed.includedIds], decisions: [],
     };
     state.resolutionAttempts.push(attempt);
-    const adapter = adapters.get(author);
-    session.calls++;
     try {
-      if (!adapter) throw new Error('Missing adapter');
-      const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs('vote', session.request.maxRounds),
-        deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
-      const raw = await adapter.propose(prompt, signal, { timeoutMs });
+      const raw = await invokeInitialConsensus(session, state, 'resolution', author,
+        prompt, adapters, publish, signal, deadlineMs, state.draft.sha256);
       attempt.rawResponse = bounded(raw, MAX_RAW);
       if (signal.aborted) throw new Error('Cancelled');
       const value = parseJSON(raw);
@@ -545,8 +550,17 @@ async function negotiateCall(
 ): Promise<string> {
   if (signal.aborted || session.calls >= (session.request.maxCalls ?? 40) ||
       (deadlineMs !== undefined && Date.now() >= deadlineMs)) throw new Error('Negotiation budget or deadline exhausted.');
+  const promptSha256 = hash(prompt);
+  const prior = [...(state.negotiationCalls ?? [])].reverse().find(c =>
+    c.cycle === cycle && c.role === role && c.provider === provider &&
+    c.promptSha256 === promptSha256 && !c.retryAuthorized);
+  if (prior) {
+    if (prior.status === 'fulfilled' && prior.rawResponse &&
+        !prior.rawResponse.includes('[Context truncated]')) return prior.rawResponse;
+    throw new Error('Uncertain or invalid M5 call requires explicit operator authorization.');
+  }
   const record: NegotiationCall = {
-    id: randomUUID(), cycle, role, provider, promptSha256: hash(prompt),
+    id: randomUUID(), cycle, role, provider, promptSha256,
     createdAt: new Date().toISOString(), status: 'issued',
   };
   state.negotiationCalls ??= [];
@@ -562,7 +576,8 @@ async function negotiateCall(
     const raw = await adapter.propose(prompt, signal, { timeoutMs });
     if (signal.aborted || !raw.trim()) throw new Error('Negotiation call cancelled or empty.');
     record.status = 'fulfilled';
-    record.rawResponse = bounded(raw, MAX_RAW);
+    record.rawResponse = raw.length <= 40000 ? raw : undefined;
+    if (raw.length > 40000) record.error = 'Result too large for durable replay; only committed stage state can be resumed.';
     await notify(session, publish, 'entry', 'negotiation');
     return raw;
   } catch (error) {
@@ -586,6 +601,54 @@ function negotiationTargets(session: DebateSession, provider: ProviderId): Debat
         (o.author === provider ? 0 : 1);
       return rank(a) - rank(b) || a.id.localeCompare(b.id);
     }).slice(0, 18);
+}
+/** Reuse only a persisted, complete result from the exact same frozen prompt.
+ * Never infer an uncertain external call is safe to replay.
+ */
+async function invokeInitialConsensus(
+  session: DebateSession, state: ConsensusState, stage: ConsensusCall['stage'],
+  provider: ProviderId, prompt: string, adapters: ReadonlyMap<string, AgentAdapter>,
+  publish: DebatePublisher, signal: AbortSignal, deadlineMs?: number,
+  frozenDraftSha256?: string,
+): Promise<string> {
+  const identity = hash(prompt);
+  const prior = [...(state.callJournal ?? [])].reverse().find(c =>
+    c.stage === stage && c.provider === provider && c.promptSha256 === identity &&
+    c.frozenDraftSha256 === frozenDraftSha256 && !c.retryAuthorized);
+  if (prior) {
+    if (prior.status === 'fulfilled' && prior.rawResponse && !prior.rawResponse.includes('[Context truncated]')) {
+      return prior.rawResponse;
+    }
+    throw new Error('Previous consensus call is unresolved or unrecoverable; explicit operator authorization required.');
+  }
+  if (interrupted(signal, deadlineMs) || session.calls >= (session.request.maxCalls ?? 40))
+    throw new Error('Consensus call budget or deadline exhausted.');
+  const record: ConsensusCall = {
+    id: randomUUID(), cycle: 0, role: stage === 'synthesis' ? 're_synthesis' : 're_vote',
+    stage, provider, promptSha256: identity, frozenDraftSha256, createdAt: new Date().toISOString(), status: 'issued',
+  };
+  state.callJournal ??= [];
+  state.callJournal.push(record);
+  session.calls++;
+  await notify(session, publish, 'entry', stage === 'synthesis' ? 'synthesis' : 'vote');
+  try {
+    const adapter = adapters.get(provider);
+    if (!adapter) throw new Error('Missing provider adapter.');
+    const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs(stage === 'synthesis' ? 'synthesis' : 'vote', session.request.maxRounds),
+      deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
+    const raw = await adapter.propose(prompt, signal, { timeoutMs });
+    if (interrupted(signal, deadlineMs) || !raw.trim()) throw new Error('Provider returned no complete response.');
+    record.status = 'fulfilled';
+    record.rawResponse = raw.length <= 40000 ? raw : undefined;
+    if (raw.length > 40000) record.error = 'Full response exceeded durable replay size; stage state must have been committed to resume.';
+    await notify(session, publish, 'entry', stage === 'synthesis' ? 'synthesis' : 'vote');
+    return raw;
+  } catch (error) {
+    record.status = 'rejected';
+    record.error = safeError(error);
+    await notify(session, publish, 'entry', stage === 'synthesis' ? 'synthesis' : 'vote');
+    throw error;
+  }
 }
 function negotiationRevisionPrompt(session: DebateSession, state: ConsensusState,
   author: ProviderId, packed: ContextPack): string {
@@ -635,13 +698,16 @@ async function executeNegotiationCycle(
 ): Promise<void> {
   if (!state.draft) return;
   const participants = session.request.providers;
-  const cycle: NegotiationCycle = {
+  const existing = state.negotiationHistory?.find(c => c.number === cycleNumber);
+  if (existing && ['completed', 'skipped'].includes(existing.outcome)) return;
+  const cycle: NegotiationCycle = existing ?? {
     number: cycleNumber, outcome: 'running', priorStatus: state.status,
     originalDraftSha256: state.draft.sha256 ?? draftHash(state.draft),
     previousDraft: structuredClone(state.draft), previousVotes: structuredClone(state.votes), revisions: [],
   };
   state.negotiationHistory ??= [];
-  state.negotiationHistory.push(cycle);
+  if (!existing) state.negotiationHistory.push(cycle);
+  cycle.outcome = 'running';
   // Include earlier signed-off critical concerns: a new SHA reopens them.
   // Reserving only currently open concerns undercounts the required end audit.
   const signoffAuthors = new Set(session.objections.filter(o => isCritical(o) &&
@@ -650,7 +716,11 @@ async function executeNegotiationCycle(
   // provider AND a final original-author review of every open critical issue.
   // Only calls actually made are metered; the other slots are protected.
   const negotiationCalls = participants.length * 2 + 1;
-  const reserveCalls = negotiationCalls + participants.length + signoffAuthors.size;
+  const fulfilledCalls = (state.negotiationCalls ?? []).filter(c =>
+    c.cycle === cycleNumber && c.status === 'fulfilled' &&
+    ['targeted_revision', 're_synthesis', 're_vote'].includes(c.role)).length;
+  const reserveCalls = Math.max(0, negotiationCalls - fulfilledCalls) +
+    participants.length + signoffAuthors.size;
   cycle.priorityObjectionIds = [...new Set(participants.flatMap(p =>
     negotiationTargets(session, p).filter(o => isCritical(o)).map(o => o.id)))];
   if (interrupted(signal, deadlineMs)) {
@@ -675,6 +745,7 @@ async function executeNegotiationCycle(
   // Run sequentially: local CLI sessions can share login state; parallel voters only
   // run on DIFFERENT providers once the revised draft has been frozen.
   for (const author of participants) {
+    if (cycle.revisions.some(r => r.provider === author && r.status === 'fulfilled')) continue;
     if (signal.aborted || (deadlineMs !== undefined && Date.now() >= deadlineMs)) {
       cycle.outcome = 'interrupted'; cycle.reason = 'Negotiation cancelled or timed out.';
       state.status = 'incomplete'; state.reason = cycle.reason; return;
@@ -703,7 +774,13 @@ async function executeNegotiationCycle(
     }
     await notify(session, publish, 'entry', 'negotiation');
   }
-  const facilitator = state.draft.author;
+  const frozen = !!cycle.revisedDraftSha256 &&
+    state.draft?.sha256 === cycle.revisedDraftSha256;
+  let candidate: ConsensusDraft;
+  const facilitator = cycle.previousDraft.author;
+  if (frozen) {
+    candidate = state.draft!;
+  } else {
   const prompt = negotiationSynthesisPrompt(state, cycle, shared);
   let parsed: Record<string, unknown> | null;
   let raw: string;
@@ -724,7 +801,7 @@ async function executeNegotiationCycle(
     await notify(session, publish, 'entry', 'negotiation');
     return;
   }
-  const candidate: ConsensusDraft = {
+  candidate = {
     author: facilitator, proposal: bounded(parsed.proposal as string, MAX_DRAFT),
     assumptions: strings(parsed.assumptions, 12, 600),
     evidence: Array.isArray(parsed.evidence) ? parsed.evidence.slice(0, 12)
@@ -764,10 +841,13 @@ async function executeNegotiationCycle(
   // New votes only attach to the new SHA, never mix with previous ballots.
   state.draft = candidate;
   state.votes = [];
+  }
   session.phase = 'vote';
   state.status = 'voting';
   await notify(session, publish, 'stage', 'vote');
   await Promise.all(participants.map(async provider => {
+    if (state.votes.some(v => v.provider === provider && v.status === 'fulfilled' &&
+      v.draftSha256 === candidate.sha256)) return;
     const started = performance.now();
     const votePrompt = makeVotePrompt(session, provider, candidate, shared);
     let vote: ConsensusVote;
@@ -788,7 +868,8 @@ async function executeNegotiationCycle(
         authoredDraft: provider === facilitator,
       };
     }
-    state.votes.push(vote);
+    const index = state.votes.findIndex(v => v.provider === provider);
+    if (index >= 0) state.votes[index] = vote; else state.votes.push(vote);
     await notify(session, publish, 'entry', 'vote');
   }));
   // Apply the same bounded contradictory-accept clarification used for the
@@ -817,9 +898,9 @@ export async function executeConsensus(
   publish: DebatePublisher, signal: AbortSignal, deadlineMs?: number,
 ): Promise<void> {
   const policy = { quorum: session.request.quorum ?? 'unanimous', blockCritical: session.request.blockCritical ?? true };
-  const state: ConsensusState = {
-    status: 'pending', policy, votes: [], unresolvedCriticalObjectionIds: [], blockingObjectionIds: [],
-  };
+  const state: ConsensusState = session.consensus && session.consensus.status !== 'not_assessed'
+    ? session.consensus
+    : { status: 'pending', policy, votes: [], unresolvedCriticalObjectionIds: [], blockingObjectionIds: [] };
   session.consensus = state;
   const participants = session.request.providers;
   // A report must exist for ALL terminal outcomes, including not assessed, invalid draft, timeout and cancellation.
@@ -845,6 +926,27 @@ export async function executeConsensus(
       state.reason = `${shared.omittedCriticalIds.length} critical objection records exceeded the shared context budget. No synthesis or voting calls were spent; full review is required.`;
       return;
     }
+    // M5.2: restore an already-started negotiation from its persisted cycle,
+    // not from the initial synthesis/voting. All completed previous cycles are
+    // immutable checkpoints, and only missing calls can be issued.
+    if (session.recovery?.kind === 'consensus' && state.negotiationHistory?.length) {
+      for (let number = 1; number <= (session.request.negotiationCycles ?? 0); number++) {
+        const prior = state.negotiationHistory.find(c => c.number === number);
+        if (!prior && !['disputed', 'blocked'].includes(state.status)) break;
+        if (prior?.outcome === 'completed') {
+          if (!['disputed', 'blocked'].includes(state.status)) break;
+          continue;
+        }
+        if (prior?.outcome === 'skipped' || prior?.outcome === 'failed') break;
+        await executeNegotiationCycle(session, state, adapters, publish, signal, deadlineMs, number, shared);
+        if (!['disputed', 'blocked'].includes(state.status)) break;
+      }
+      if (!interrupted(signal, deadlineMs) && state.status === 'blocked') {
+        await resolveOpenObjections(session, state, adapters, publish, signal, deadlineMs);
+        determine(session, state);
+      }
+      return;
+    }
     if ((session.request.maxCalls ?? 40) - session.calls < participants.length + 1) {
       state.status = 'not_assessed';
       state.reason = `Insufficient call budget: need ${participants.length + 1} additional calls for a draft and independent votes.`;
@@ -855,46 +957,48 @@ export async function executeConsensus(
       state.reason = 'Execution cancelled before the consensus stage.';
       return;
     }
-    session.phase = 'synthesis';
-    state.status = 'drafting';
-    await notify(session, publish, 'stage', 'synthesis');
-    const facilitator = chooseFacilitator(session);
-    const draftPrompt = makeDraftPrompt(session, participants, shared);
-    session.calls++;
-    let rawDraft: string;
-    try {
-      const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs('synthesis', session.request.maxRounds),
-        deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
-      const reply = await adapters.get(facilitator)?.propose(draftPrompt, signal, { timeoutMs });
-      if (!reply || signal.aborted) throw new Error('Draft unavailable');
-      rawDraft = reply;
-    } catch (error) {
+    if (!state.draft?.proposal?.trim()) {
+      session.phase = 'synthesis';
+      state.status = 'drafting';
+      await notify(session, publish, 'stage', 'synthesis');
+      const facilitator = chooseFacilitator(session);
+      const draftPrompt = makeDraftPrompt(session, participants, shared);
+      let rawDraft: string;
+      try {
+        rawDraft = await invokeInitialConsensus(session, state, 'synthesis', facilitator,
+          draftPrompt, adapters, publish, signal, deadlineMs);
+      } catch (error) {
+        state.status = 'incomplete';
+        state.reason = interrupted(signal, deadlineMs) ? 'Draft interrupted or timed out.' : safeError(error);
+        return;
+      }
+        const parsed = parseJSON(rawDraft);
+      if (!parsed || typeof parsed.proposal !== 'string' || parsed.proposal.trim().length < 10) {
+        state.status = 'incomplete';
+        state.reason = 'Facilitator returned an invalid structured draft. No ballots were attempted.';
+        state.draft = { author: facilitator, proposal: '', assumptions: [], evidence: [],
+          rawResponse: bounded(rawDraft, MAX_RAW), provenance: provenance(facilitator, draftPrompt) };
+        return;
+      }
+      state.draft = {
+        author: facilitator, proposal: bounded(parsed.proposal, MAX_DRAFT),
+        assumptions: strings(parsed.assumptions, 12, 600),
+        evidence: Array.isArray(parsed.evidence) ? parsed.evidence.slice(0, 12).filter((e): e is Record<string, unknown> =>
+          Boolean(e && typeof e === 'object' && typeof e.claim === 'string' && e.claim.trim()))
+          .map((e, i) => ({
+            id: `E${i + 1}`, claim: bounded(e.claim as string, 900),
+            source: typeof e.source === 'string' ? bounded(e.source, 300) : undefined,
+            verification: 'unverified' as const,
+          })) : [],
+        rawResponse: bounded(rawDraft, MAX_RAW), provenance: provenance(facilitator, draftPrompt),
+      };
+      state.draft.sha256 = draftHash(state.draft);
+      await notify(session, publish, 'entry', 'synthesis');
+    } else if (!state.draft.sha256) {
       state.status = 'incomplete';
-      state.reason = signal.aborted ? 'Draft cancelled or timed out.' : safeError(error);
+      state.reason = 'Stored consensus draft has no frozen SHA-256; recovery requires a new run.';
       return;
     }
-    const parsed = parseJSON(rawDraft);
-    if (!parsed || typeof parsed.proposal !== 'string' || parsed.proposal.trim().length < 10) {
-      state.status = 'incomplete';
-      state.reason = 'Facilitator returned an invalid structured draft. No ballots were attempted.';
-      state.draft = { author: facilitator, proposal: '', assumptions: [], evidence: [],
-        rawResponse: bounded(rawDraft, MAX_RAW), provenance: provenance(facilitator, draftPrompt) };
-      return;
-    }
-    state.draft = {
-      author: facilitator, proposal: bounded(parsed.proposal, MAX_DRAFT),
-      assumptions: strings(parsed.assumptions, 12, 600),
-      evidence: Array.isArray(parsed.evidence) ? parsed.evidence.slice(0, 12).filter((e): e is Record<string, unknown> =>
-        Boolean(e && typeof e === 'object' && typeof e.claim === 'string' && e.claim.trim()))
-        .map((e, i) => ({
-          id: `E${i + 1}`, claim: bounded(e.claim as string, 900),
-          source: typeof e.source === 'string' ? bounded(e.source, 300) : undefined,
-          verification: 'unverified' as const,
-        })) : [],
-      rawResponse: bounded(rawDraft, MAX_RAW), provenance: provenance(facilitator, draftPrompt),
-    };
-    state.draft.sha256 = draftHash(state.draft);
-    await notify(session, publish, 'entry', 'synthesis');
     if (signal.aborted) {
       state.status = 'incomplete';
       state.reason = 'Execution cancelled before independent voting.';
@@ -903,33 +1007,34 @@ export async function executeConsensus(
     session.phase = 'vote';
     state.status = 'voting';
     await notify(session, publish, 'stage', 'vote');
-    const draft = state.draft;
+    const draft = state.draft!;
+    // Successful ballots are frozen checkpoints, never invoked again for the
+    // same draft SHA. Uncertain/failed ballots require operator authorization.
     await Promise.all(participants.map(async (provider) => {
+      const prior = state.votes.find(v => v.provider === provider &&
+        v.status === 'fulfilled' && v.draftSha256 === draft.sha256);
+      if (prior) return;
       const start = performance.now();
-      session.calls++;
       const prompt = makeVotePrompt(session, provider, draft, shared);
       let vote: ConsensusVote;
       let rawResponse: string | undefined;
       try {
-        const adapter = adapters.get(provider);
-        if (!adapter) throw new Error('No provider adapter');
-        const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs('vote', session.request.maxRounds),
-          deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
-        const raw = await adapter.propose(prompt, signal, { timeoutMs });
-        rawResponse = raw;
-        if (signal.aborted) throw new Error('Cancelled');
-        vote = parseVote(raw, provider, session, draft, prompt, Math.round(performance.now() - start));
+        rawResponse = await invokeInitialConsensus(session, state, 'vote', provider,
+          prompt, adapters, publish, signal, deadlineMs, draft.sha256);
+        if (interrupted(signal, deadlineMs)) throw new Error('Cancelled');
+        vote = parseVote(rawResponse, provider, session, draft, prompt, Math.round(performance.now() - start));
       } catch (error) {
         vote = {
           provider, status: 'rejected', concerns: [], resolvedObjectionIds: [],
-          error: signal.aborted ? 'Provider vote cancelled or timed out.' :
+          error: interrupted(signal, deadlineMs) ? 'Provider vote cancelled or timed out.' :
             error instanceof Error && error.message.startsWith('Contradictory accept ballot:') ? error.message : safeError(error),
           durationMs: Math.round(performance.now() - start),
           provenance: provenance(provider, prompt), draftSha256: draft.sha256, authoredDraft: draft.author === provider,
           rawResponse: rawResponse === undefined ? undefined : bounded(rawResponse, MAX_RAW),
         };
       }
-      state.votes.push(vote);
+      const index = state.votes.findIndex(v => v.provider === provider);
+      if (index >= 0) state.votes[index] = vote; else state.votes.push(vote);
       await notify(session, publish, 'entry', 'vote');
     }));
     if (signal.aborted) {
