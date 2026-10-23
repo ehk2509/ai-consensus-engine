@@ -151,8 +151,9 @@ export class DurableDebateWorker {
     this.counters.started++;
     try {
       await executeDebate(session, this.adapters, this.publish, controller.signal);
-      if (session.status === 'completed') this.counters.completed++;
-      else if (session.status === 'cancelled') this.counters.cancelled++;
+      const finalStatus = session.status as DebateSession['status'];
+      if (finalStatus === 'completed') this.counters.completed++;
+      else if (finalStatus === 'cancelled') this.counters.cancelled++;
       else this.counters.failed++;
     } catch (error) {
       this.counters.failed++;
