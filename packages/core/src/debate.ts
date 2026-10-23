@@ -6,7 +6,7 @@ import type { ConsensusState } from './consensus.ts';
 import { decodeCritique, packObjections } from './objection-utils.ts';
 import type { CritiqueParseStatus } from './objection-utils.ts';
 
-export type DebatePhase = 'proposal' | 'critique' | 'rebuttal' | 'revision' | 'synthesis' | 'vote' | 'resolution' | 'clarification';
+export type DebatePhase = 'proposal' | 'critique' | 'rebuttal' | 'revision' | 'synthesis' | 'vote' | 'resolution' | 'clarification' | 'negotiation';
 export type DebateStatus = 'queued' | 'running' | 'completed' | 'partial' | 'insufficient' | 'failed' | 'interrupted' | 'cancelled' | 'budget_exhausted';
 
 export interface DebateRequest extends BrainstormRequest {
@@ -16,6 +16,8 @@ export interface DebateRequest extends BrainstormRequest {
   consensus?: boolean;
   quorum?: 'unanimous' | 'two_thirds';
   blockCritical?: boolean;
+  /** Optional extra bounded negotiation cycles after the first independent vote. */
+  negotiationCycles?: 0 | 1 | 2;
 }
 export interface DebateObjection {
   id: string;
@@ -100,10 +102,12 @@ export function validateDebateRequest(value: unknown): DebateRequest {
   const consensus = obj.consensus === undefined ? false : obj.consensus;
   const quorum = obj.quorum === undefined ? 'unanimous' : obj.quorum;
   const blockCritical = obj.blockCritical === undefined ? true : obj.blockCritical;
+  const negotiationCycles = obj.negotiationCycles === undefined ? 0 : obj.negotiationCycles;
   if (typeof consensus !== 'boolean') throw new Error('consensus must be a boolean.');
   if (quorum !== 'unanimous' && quorum !== 'two_thirds') throw new Error('quorum must be unanimous or two_thirds.');
   if (typeof blockCritical !== 'boolean') throw new Error('blockCritical must be a boolean.');
-  return { ...base, maxRounds, maxCalls, maxDurationMs, consensus, quorum, blockCritical };
+  if (negotiationCycles !== 0 && negotiationCycles !== 1 && negotiationCycles !== 2) throw new Error('negotiationCycles must be 0, 1, or 2.');
+  return { ...base, maxRounds, maxCalls, maxDurationMs, consensus, quorum, blockCritical, negotiationCycles: negotiationCycles as 0 | 1 | 2 };
 }
 
 export function createDebateSession(request: DebateRequest): DebateSession {

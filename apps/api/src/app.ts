@@ -41,7 +41,7 @@ export function makeApp(options: AppOptions = {}) {
   app.addHook('onReady', async () => { await worker.start(); });
   app.addHook('onClose', async () => { await worker.stop(); });
 
-  app.get('/api/health', async () => ({ status: 'ok', version: '0.4.2', milestone: 'M4' }));
+  app.get('/api/health', async () => ({ status: 'ok', version: '0.5.0', milestone: 'M5' }));
   app.get('/api/metrics', async () => ({
     status: 'ok', worker: { running: !!worker.running, queued: worker.queued },
     calls: worker.counters, dailyQuota: await quota.snapshot(),
