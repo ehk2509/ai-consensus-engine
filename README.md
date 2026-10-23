@@ -210,3 +210,17 @@ Negotiated synthesis can optionally include an auditable `decisions` array conta
 - **Targeted negotiation:** Per-provider action plans rank unresolved critical concerns, especially authored objections. The full shared objection ledger remains available; advisory duplicate groups never collapse source IDs or imply semantic identity. Vector/embedding semantic retrieval remains a future quality experiment, not an automatic objection-resolution mechanism.
 
 **Frozen-draft identity:** M5.1 hashes the complete voted-on draft (author, proposal, assumptions, and evidence claims), rather than only its Markdown proposal. Changing source/evidence claims or assumptions without changing the prose still requires a new vote and original-author reconfirmation. Historical reports remain immutable.
+
+## M5.2 — Explicit, checkpoint-safe debate and consensus recovery
+
+Sessions persist provider-call intentions **before** invoking external CLI accounts, including initial consensus synthesis, independent ballots, and negotiated revisions/re-votes. The original wall-clock deadline and model-call budget remain binding; previous consumption is never reset. Successful proposals, complete votes, and frozen decision hashes are retained. A journal entry with unknown/failed provider outcome **cannot automatically replay**. The operator must provide its exact call ID and accept possible duplicate CLI charges.
+
+### Resume API
+
+`POST /api/debates/:id/resume` with JSON `{"retryCallIds":["<exact failed/uncertain call UUID>"],"acknowledgeMayRepeatCall":true}` only if such calls need retry. A 409 includes uncertainty IDs where applicable. The web interface shows exact call IDs and checkboxes for operator authorization. Pending, never-issued stages can resume with `{}`. Finished final decisions remain immutable.
+
+**Partial debate:** a failed/skipped stage can be retried explicitly only when no successful downstream evidence depends on it. Completed peer steps retain their identifiers and outputs; successful final-revision retries can proceed to consensus without restarting the entire debate. Retries that would invalidate rebuttals or later revisions are rejected and require a new run.
+
+**Consensus:** a complete saved synthesis or an independent ballot bound to the current frozen draft is reused. Durable response journals bridge crashes between a provider response and writing its parsed artifact. Invalid or potentially invoked calls require explicit authorization. An interrupted M5 cycle uses its saved revisions, candidate draft and vote records instead of restarting from zero.
+
+**Safety boundaries:** Older consensus sessions without sufficient write-ahead journals cannot be reconstructed; they return 409 rather than risking duplicate calls. Deadlines cannot be extended. Legacy sessions lacking a deadline derive a conservative one from their creation time. Call budgets and provider quota still count all retried calls. Rejected upstream work with successful downstream dependencies is not silently rewritten. Interrupted execution remains auditable in the local session JSON; neither external model correctness nor commercial usage rights are independently verified.

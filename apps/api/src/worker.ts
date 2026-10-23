@@ -115,6 +115,14 @@ export class DurableDebateWorker {
         !['running', 'interrupted', 'queued'].includes(session.status)) {
       return conflict('The recorded consensus decision is final. Create a new debate to re-evaluate it.');
     }
+    // Pre-M4.2 stored work might lack a persisted deadline. Derive one
+    // conservatively from creation time; do not grant a fresh full budget.
+    if (!session.executionDeadlineAt) {
+      const created = Date.parse(session.createdAt);
+      if (Number.isFinite(created)) {
+        session.executionDeadlineAt = new Date(created + (session.request.maxDurationMs ?? 900000)).toISOString();
+      }
+    }
     const deadline = Date.parse(session.executionDeadlineAt ?? '');
     if (!Number.isFinite(deadline) || deadline <= Date.now()) {
       return conflict('The original session deadline has expired; resuming cannot extend it. Start a new run.');
