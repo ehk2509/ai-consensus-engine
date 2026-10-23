@@ -791,7 +791,7 @@ async function executeNegotiationCycle(
     state.reason = cycle.reason;
   } else {
     determine(session, state);
-    cycle.outcome = state.status === 'incomplete' ? 'partial' : 'completed';
+    cycle.outcome = (state.status as ConsensusStatus) === 'incomplete' ? 'partial' : 'completed';
     if (cycle.outcome === 'partial') {
       cycle.reason = 'One or more new ballots were invalid; earlier votes cannot fill missing quorum.';
     }
