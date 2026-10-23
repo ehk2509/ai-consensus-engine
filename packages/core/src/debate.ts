@@ -419,7 +419,7 @@ export async function executeDebate(
         session.consensus.reason = 'Consensus finalization failed; inspect local logs or storage.';
       }
     } finally {
-      session.status = session.debateStatus;
+      session.status = session.debateStatus ?? 'partial';
     }
   }
   clearTimeout(timer);

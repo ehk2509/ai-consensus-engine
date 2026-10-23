@@ -150,7 +150,7 @@ export class DurableDebateWorker {
         if (item.stage === 'synthesis') return !consensus?.draft?.sha256;
         if (item.stage === 'vote') return !consensus?.votes.some(v =>
           v.provider === item.provider && v.status === 'fulfilled' &&
-          v.draftSha256 === item.frozenDraftSha256);
+          v.draftSha256 === (item as import('../../../packages/core/src/consensus.ts').ConsensusCall).frozenDraftSha256);
         return false; // A failed optional clarification/resolution is not a mandatory checkpoint.
       }
       const cycle = consensus?.negotiationHistory?.find(c => c.number === item.cycle);
