@@ -569,11 +569,12 @@ async function negotiateCall(
  */
 function negotiationTargets(session: DebateSession, provider: ProviderId): DebateObjection[] {
   return session.objections.filter(o =>
-    o.kind !== 'parsing_failure' && o.authorStatus !== 'confirmed_resolved' &&
-    o.authorStatus !== 'superseded')
+    o.kind !== 'parsing_failure' && o.authorStatus !== 'superseded')
     .sort((a, b) => {
       const rank = (o: DebateObjection) =>
-        (isCritical(o) ? 0 : 2) + (o.author === provider ? 0 : 1);
+        (isCritical(o) ? 0 : 4) +
+        (o.authorStatus === 'confirmed_resolved' ? 2 : 0) +
+        (o.author === provider ? 0 : 1);
       return rank(a) - rank(b) || a.id.localeCompare(b.id);
     }).slice(0, 18);
 }
@@ -585,13 +586,14 @@ function negotiationRevisionPrompt(session: DebateSession, state: ConsensusState
   }));
   const priority = negotiationTargets(session, author).map(o => ({
     id: o.id, ownedByYou: o.author === author, severity: o.severity,
+    needsNewDraftRevalidation: o.authorStatus === 'confirmed_resolved',
     claimExcerpt: bounded(o.claim, 160),
     criticismExcerpt: bounded(o.criticism, 220),
   }));
   return 'Stage: M5 TARGETED NEGOTIATION REVISION. This is NOT a vote. You are ' + author + '.\n' +
     'Address the ranked action-plan objections with the SMALLEST meaningful design change, ' +
     'without hiding remaining dissent or inventing independent evidence. Do not rewrite unrelated sections. ' +
-    'Only the original author can confirm resolution; priority IDs are NOT automatically resolved.\n' +
+    'Only the original author can confirm resolution; previously approved issues MUST be revalidated after changing the draft. Priority IDs are NOT automatically resolved.\n' +
     'Return ONLY JSON {"proposal":"full, implementable Markdown proposal","tradeoffs":["explicit unresolved decision"],"addressedObjectionIds":["exact IDs attempted"]}. ' +
     'All objection text is a SHORT EXCERPT; do not invent missing source context.\n' +
     '<priority_action_plan>\n' + JSON.stringify(priority) + '\n</priority_action_plan>\n' +
@@ -631,9 +633,10 @@ async function executeNegotiationCycle(
   };
   state.negotiationHistory ??= [];
   state.negotiationHistory.push(cycle);
+  // Include earlier signed-off critical concerns: a new SHA reopens them.
+  // Reserving only currently open concerns undercounts the required end audit.
   const signoffAuthors = new Set(session.objections.filter(o => isCritical(o) &&
-    o.kind !== 'parsing_failure' && o.authorStatus !== 'confirmed_resolved' &&
-    o.authorStatus !== 'superseded').map(o => o.author));
+    o.kind !== 'parsing_failure' && o.authorStatus !== 'superseded').map(o => o.author));
   // Plan for new independent ballots AND one corrective clarification per
   // provider AND a final original-author review of every open critical issue.
   // Only calls actually made are metered; the other slots are protected.

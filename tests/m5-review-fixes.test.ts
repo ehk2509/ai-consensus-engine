@@ -135,6 +135,21 @@ test('P1: preserve budget for required author sign-offs and bounded clarificatio
   assert.equal(calls.filter(c => c.prompt.includes('M5 TARGETED')).length, 0);
 });
 
+test('P1: budget reserves author reconfirmation for objections already signed on Draft A', async () => {
+  const {session,calls} = await run((id,prompt,debate) => {
+    if (prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')) {
+      return ballot('conditional', debate.objections.filter(o => o.author === id).map(o => o.id));
+    }
+    return reply(id,prompt);
+  }, {maxCalls: 29});
+  assert.equal(session.calls,19);
+  assert.equal(session.consensus?.status,'disputed');
+  assert.equal(session.consensus?.negotiationHistory?.[0]?.outcome,'skipped');
+  assert.match(session.consensus?.negotiationHistory?.[0]?.reason ?? '',/confirmations/);
+  assert.ok(session.objections.every(o => o.authorStatus === 'confirmed_resolved'));
+  assert.equal(calls.filter(c => c.prompt.includes('Stage: M5 TARGETED')).length,0);
+});
+
 test('P2: a contradictory new accept ballot receives one journaled, independent clarification', async () => {
   const {session,calls} = await run((id,prompt) => {
     if (prompt.includes('Stage: CONSENSUS CLARIFICATION')) {
