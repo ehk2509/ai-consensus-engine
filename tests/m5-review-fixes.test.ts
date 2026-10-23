@@ -126,6 +126,24 @@ for (const stage of ['targeted', 'synthesis', 're-vote'] as const) {
   });
 }
 
+test('P1: a deadline exceeded during targeted revision becomes interrupted, not a restored old verdict', async () => {
+  const actualClock = Date.now;
+  try {
+    const {session} = await run((id,prompt) => {
+      if (prompt.includes('Stage: M5 TARGETED NEGOTIATION REVISION')) {
+        Date.now = () => actualClock() + 180000;
+      }
+      return reply(id,prompt);
+    });
+    assert.equal(session.consensus?.negotiationHistory?.[0]?.outcome, 'interrupted');
+    assert.equal(session.consensus?.status, 'incomplete');
+    assert.match(session.consensus?.reason ?? '', /interrupt|deadline/i);
+    assert.ok(session.consensus?.negotiationHistory?.[0]?.previousVotes.every(v => v.verdict === 'conditional'));
+  } finally {
+    Date.now = actualClock;
+  }
+});
+
 test('P1: preserve budget for required author sign-offs and bounded clarifications', async () => {
   const {session,calls} = await run(reply, {maxCalls: 29});
   assert.equal(session.calls, 19);
