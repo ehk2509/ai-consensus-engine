@@ -10,6 +10,7 @@ export interface WorkerCounters {
 export class DurableDebateWorker {
   private readonly pending: string[] = [];
   private readonly controllers = new Map<string, AbortController>();
+  private readonly pendingCancellations = new Set<string>();
   private runningId: string | null = null;
   private runPromise: Promise<void> | null = null;
   private releaseLease: (() => Promise<void>) | null = null;
@@ -77,6 +78,7 @@ export class DurableDebateWorker {
     }
     const controller = this.controllers.get(id);
     if (controller) { controller.abort(); return 'cancelling'; }
+    if (this.runningId === id) { this.pendingCancellations.add(id); return 'cancelling'; }
     return await this.store.get(id) ? 'inactive' : 'missing';
   }
   /** No ambiguous external call is automatically repeated after restart.
@@ -133,6 +135,7 @@ export class DurableDebateWorker {
       this.logError(error, 'Durable worker could not load queued session');
     }).finally(() => {
       this.controllers.delete(id);
+      this.pendingCancellations.delete(id);
       this.store.deactivate(id);
       this.runningId = null;
       this.runPromise = null;
@@ -144,6 +147,7 @@ export class DurableDebateWorker {
     if (!session || session.status !== 'queued') return;
     const controller = new AbortController();
     this.controllers.set(id, controller);
+    if (this.pendingCancellations.has(id)) controller.abort();
     this.counters.started++;
     try {
       await executeDebate(session, this.adapters, this.publish, controller.signal);
@@ -163,6 +167,7 @@ export class DurableDebateWorker {
   }
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.runningId) this.pendingCancellations.add(this.runningId);
     for (const controller of this.controllers.values()) controller.abort();
     // Queued sessions remain durable for the next process; do not rewrite them.
     if (this.runPromise) await this.runPromise;
