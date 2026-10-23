@@ -457,7 +457,6 @@ async function clarifyContradictions(
     const start = performance.now();
     const basePrompt = makeVotePrompt(session, original.provider, state.draft);
     const prompt = 'Stage: CONSENSUS CLARIFICATION. Your earlier vote was rejected because it said accept but disclaimed confirmation of an important issue. Explicitly reconsider whether to vote conditional/reject, or unconditionally accept with no remaining concerns. Do not claim to have seen evidence omitted from the provided context.\n' + basePrompt;
-    if (negotiationCycle === undefined) session.calls++;
     let corrected: ConsensusVote;
     try {
       const timeoutMs = Math.max(1, Math.min(recommendedTurnTimeoutMs('vote', session.request.maxRounds),

@@ -119,12 +119,11 @@ test('M5.2 resumes incomplete consensus voting, preserving valid ballots and exa
         resolvedObjectionIds:[],supersessions:[]})
       : respond(id,prompt);
   },async(app)=>{
-    assert.equal((await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',payload:{}})).statusCode,202);
-    // No silent repeat is allowed; failed provider must be explicitly selected for a new call.
-    const noRetry=await completed(app,session.id);
-    assert.equal(noRetry.consensus?.status,'incomplete');
+    const noAuth=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',payload:{}});
+    assert.equal(noAuth.statusCode,409);
+    assert.ok(noAuth.json().uncertainCallIds.includes(retry.id));
     assert.equal(voteCalls,0);
-    // A finished incomplete vote can be explicitly re-authorized.
+    // A finished incomplete vote must be explicitly re-authorized.
     const resumed=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',
       payload:{retryCallIds:[retry.id],acknowledgeMayRepeatCall:true}});
     assert.equal(resumed.statusCode,202);

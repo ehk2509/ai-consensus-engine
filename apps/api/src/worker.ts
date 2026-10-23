@@ -145,9 +145,26 @@ export class DurableDebateWorker {
     const requested = new Set(retryIds);
     const candidates = [...debateCalls, ...failedDebate, ...unknown, ...rejected];
     const candidateIds = new Set(candidates.map(e => e.id));
-    const mandatory = [...debateCalls, ...unknown];
+    const requiredRejected = rejected.filter(item => {
+      if ('stage' in item) {
+        if (item.stage === 'synthesis') return !consensus?.draft?.sha256;
+        if (item.stage === 'vote') return !consensus?.votes.some(v =>
+          v.provider === item.provider && v.status === 'fulfilled' &&
+          v.draftSha256 === item.frozenDraftSha256);
+        return false; // A failed optional clarification/resolution is not a mandatory checkpoint.
+      }
+      const cycle = consensus?.negotiationHistory?.find(c => c.number === item.cycle);
+      if (item.role === 'targeted_revision') return !cycle?.revisions.some(r =>
+        r.provider === item.provider && r.status === 'fulfilled');
+      if (item.role === 're_synthesis') return !cycle?.revisedDraftSha256;
+      if (item.role === 're_vote') return !consensus?.votes.some(v =>
+        v.provider === item.provider && v.status === 'fulfilled' &&
+        v.draftSha256 === cycle?.revisedDraftSha256);
+      return false;
+    });
+    const mandatory = [...debateCalls, ...unknown, ...requiredRejected];
     if (mandatory.some(e => !requested.has(e.id))) {
-      return conflict('Uncertain provider calls need exact IDs and explicit duplicate-charge authorization.',
+      return conflict('Uncertain or unresolved failed provider calls need exact IDs and explicit duplicate-charge authorization.',
         mandatory.map(e => e.id));
     }
     if ([...requested].some(id => !candidateIds.has(id))) {
