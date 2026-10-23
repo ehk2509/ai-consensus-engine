@@ -194,3 +194,9 @@ The previous decision report disclosed 63 omitted objections (13 critical), whil
 **Security:** The M5 additional provider calls use the same authenticated local CLI worker, quotas and call budget. Each M5 invocation is journaled as `issued` before execution and recorded as fulfilled/rejected. Consensus-stage crash recovery still fails closed and will never auto-replay an uncertain call. This is an in-process local-first negotiation workflow, not a distributed execution system.
 
 The debate report includes an M5 negotiation audit with original/follow-up vote outcomes and original/revised SHA-256 values. Old M4 runs and their reports are not rewritten.
+
+### M5 traceable grouping and decision matrix
+
+The engine deterministically groups only near-identical open substantive objections (high overlap of claim and criticism terms, Jaccard threshold 0.85). This is a conservative **textual similarity heuristic**, not embedding-based semantic equivalence. Parsing-integrity failures are never grouped with substantive objections, and confirmed/superseded objections are excluded from this advisory view. **No ID, criticism, author status or severity is removed or auto-resolved by grouping**; the full global ledger remains authoritative.
+
+Negotiated synthesis can optionally include an auditable `decisions` array containing explicit issue, choice, rationale, referenced exact objection IDs and remaining uncertainties. Only known IDs are retained; the decisions are model-generated suggestions, never factual verification or original-author sign-off. The UI and Markdown report show this decision matrix and the independent ballots for each revised draft.

@@ -89,16 +89,30 @@ test('M5 sign-off on the re-vote closes only authored substantive IDs and preser
       claim: 'Insufficient operational evidence', criticism: 'The plan has no defined measurement and success gates.', severity: 'high',
     }] });
     if (prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')) {
-      if (prompt.includes('revised shared decision')) {
+      if (prompt.includes('A new researched plan')) {
         return vote('accept', debate.objections.filter(o => o.author === id).map(o => o.id));
       }
       return vote('conditional');
     }
+    if (prompt.includes('Stage: M5 NEGOTIATED SYNTHESIS')) return JSON.stringify({
+      proposal: 'A new researched plan with explicit operational gates and evidence checks.',
+      assumptions: [], evidence: [], decisions: [{
+        issue: 'Insufficient operational evidence', choice: 'Require an auditable pilot',
+        rationale: 'The pilot has explicit stop conditions and validated instrumentation.',
+        relatedObjectionIds: [debate.objections[0]?.id, 'invented-id'],
+        remainingUncertainties: ['Source permissions must still be verified'],
+      }],
+    });
     return simple(id, prompt);
   });
   assert.equal(session.consensus?.status, 'unanimous');
   assert.equal(session.consensus?.unresolvedCriticalObjectionIds.length, 0);
   assert.ok(session.objections.every(o => o.authorStatus === 'confirmed_resolved'));
+  const decisions = session.consensus?.negotiationHistory?.[0]?.decisions ?? [];
+  assert.equal(decisions.length, 1);
+  assert.deepEqual(decisions[0]?.relatedObjectionIds, [session.objections[0]?.id]);
+  assert.ok(session.consensus?.reportMarkdown?.includes('Require an auditable pilot'));
+  assert.ok((session.consensus?.objectionGroups?.length ?? 0) > 0);
   assert.notEqual(session.consensus?.draft?.sha256, session.consensus?.negotiationHistory?.[0]?.originalDraftSha256);
 });
 

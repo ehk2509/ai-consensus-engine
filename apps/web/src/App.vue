@@ -362,6 +362,7 @@ onBeforeUnmount(closeStream);
             <p class="muted">{{ debate.consensus.reason || 'The council is evaluating the shared draft.' }}</p>
             <p class="muted">Consensus records model judgments, not externally verified facts. The facilitator's self-authored vote is identified and cannot alone satisfy the non-author acceptance requirement.</p>
             <p class="muted">Quorum: {{ debate.consensus.policy.quorum.replace('_', '-') }} · Critical objection gate: {{ debate.consensus.policy.blockCritical ? 'Enabled' : 'Disabled' }} · {{ debate.consensus.votes.length }} ballots</p>
+            <p v-if="debate.consensus.objectionGroups" class="muted">{{ debate.consensus.objectionGroups.filter(g => g.objectionIds.length > 1).length }} similar-objection groups detected for review; all original objection IDs are preserved.</p>
             <p v-if="debate.consensus.objectionCoverage" class="muted">Shared objection context: {{ debate.consensus.objectionCoverage.included }}/{{ debate.consensus.objectionCoverage.total }} records included as excerpts · {{ debate.consensus.objectionCoverage.omitted }} omitted, including {{ debate.consensus.objectionCoverage.omittedCritical }} critical. Synthesis and ballots use the same global ledger (SHA-256: {{ debate.consensus.objectionCoverage.contextSha256.slice(0, 12) }}…).</p>
             <p v-if="debate.consensus.contextOmittedCriticalIds?.length" class="warning">{{ debate.consensus.contextOmittedCriticalIds.length }} critical objections could not fit into model context. Consensus cannot be verified.</p>
             <p v-if="debate.consensus.status === 'blocked_by_unparseable_evidence'" class="warning">Parsing/incomplete-source evidence prevents final consensus. This is not the same as a substantive disagreement.</p>
@@ -373,6 +374,14 @@ onBeforeUnmount(closeStream);
                 <p v-if="cycle.reason" class="warning">{{ cycle.reason }}</p>
                 <p class="muted">Original: {{ cycle.originalDraftSha256 }} · Revised: {{ cycle.revisedDraftSha256 ?? 'none' }}</p>
                 <p v-for="revision in cycle.revisions" :key="revision.provider" class="muted">{{ labels[revision.provider] }} targeted revision: {{ revision.status }} {{ revision.error ?? '' }}</p>
+                <div v-if="cycle.decisions?.length" class="evidence-register">
+                  <strong>Structured decision matrix (model-generated, unverified)</strong>
+                  <p v-for="(decision, i) in cycle.decisions" :key="i" class="muted">
+                    {{ decision.issue }} → {{ decision.choice }} · {{ decision.rationale }}
+                    · Related objections: {{ decision.relatedObjectionIds.join(', ') || 'none' }}
+                    · Remaining uncertainties: {{ decision.remainingUncertainties.join('; ') || 'none reported' }}
+                  </p>
+                </div>
                 <p class="muted">Original votes: {{ cycle.previousVotes.map(v => labels[v.provider] + ': ' + (v.verdict ?? 'invalid')).join(' · ') }}</p>
                 <p v-if="cycle.newVotes?.length" class="muted">Independent re-votes: {{ cycle.newVotes.map(v => labels[v.provider] + ': ' + (v.verdict ?? 'invalid')).join(' · ') }}</p>
               </details>
