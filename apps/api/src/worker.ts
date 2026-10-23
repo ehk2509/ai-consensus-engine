@@ -39,8 +39,10 @@ export class DurableDebateWorker {
     try {
       // Only never-issued queued work is auto-recovered. A crashed running call
       // stays interrupted until an explicit operator decision.
-      for (const session of await this.store.listPersisted(1000)) {
-        if (session.status === 'queued' && session.entries.length === 0 && !session.consensus) {
+      for (const session of await this.store.listRecoverableQueued()) {
+        // Queued sessions may contain successfully completed steps from an earlier
+        // approved manual resume. They are safe if no unapproved intent remains.
+        if (!uncertainDebateEntries(session).length && !session.consensus) {
           this.store.activate(session.id);
           this.pending.push(session.id);
           this.counters.recoveredQueued++;

@@ -43,6 +43,31 @@ function terminateTree(pid: number | undefined, fallback: () => void): void {
   }
 }
 
+/** Parent-death watchdog: its FD 3 is a pipe held ONLY by the server.
+ * When the server is SIGKILLed, EOF triggers killing the CLI process group.
+ * The watcher itself is outside the CLI process group. This is POSIX best-effort
+ * containment, not a hardened sandbox; use a cgroup/job object for stronger isolation.
+ */
+const GUARDIAN_SCRIPT = String.raw`
+const fs = require('node:fs');
+const cp = require('node:child_process');
+const pid = Number(process.argv[1]);
+const stop = () => {
+  if (process.platform === 'win32') {
+    const killer = cp.spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    killer.once('close', () => process.exit(0));
+    killer.once('error', () => process.exit(0));
+  } else {
+    try { process.kill(-pid, 'SIGKILL'); } catch {}
+    process.exit(0);
+  }
+};
+const channel = fs.createReadStream('', { fd: 3, autoClose: false });
+channel.once('end', stop);
+channel.once('error', stop);
+channel.resume();
+`;
+
 /** Shell-free, bounded and best-effort process-tree-isolated CLI invocation. */
 export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
   if (!Number.isFinite(spec.timeoutMs) || spec.timeoutMs <= 0) {
@@ -56,6 +81,18 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
         windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
         env: providerEnvironment(),
       });
+      // A separate process notices parent death even if JS cleanup cannot run.
+      // The guardian never inherits the API access token or model prompt.
+      const guardian = child.pid ? spawn(process.execPath, ['-e', GUARDIAN_SCRIPT, String(child.pid)], {
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'], windowsHide: true,
+        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+      }) : null;
+      if (guardian) {
+        guardian.once('error', () => terminateTree(child.pid, () => child.kill('SIGKILL')));
+        guardian.once('exit', () => {
+          if (!child.killed && child.exitCode === null) terminateTree(child.pid, () => child.kill('SIGKILL'));
+        });
+      }
       const stdout: Buffer[] = [];
       let size = 0;
       let timedOut = false;
@@ -82,6 +119,8 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
       });
       child.on('error', (error: NodeJS.ErrnoException) => { spawnError = error; });
       child.on('close', (code) => {
+        const pipe = guardian?.stdio[3];
+        if (pipe && 'end' in pipe) (pipe as import('node:stream').Writable).end();
         clearTimeout(timer);
         spec.signal?.removeEventListener('abort', onAbort);
         if (aborted) return reject(new AgentExecutionError('Provider cancelled.'));

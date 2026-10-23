@@ -1,6 +1,6 @@
-import { mkdir, readFile, rename, writeFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { durableReplace } from './durable-json.ts';
 import type { ProviderId } from '../../../packages/core/src/types.ts';
 import { AgentExecutionError } from './process.ts';
 
@@ -67,15 +67,7 @@ export class DailyCallQuota {
       }
       value.total++;
       value.providers[provider]++;
-      await mkdir(this.directory, { recursive: true, mode: 0o700 });
-      const temporary = this.filename(date) + '.' + randomUUID() + '.tmp';
-      try {
-        await writeFile(temporary, JSON.stringify(value), { mode: 0o600 });
-        await rename(temporary, this.filename(date));
-      } catch (error) {
-        await rm(temporary, { force: true });
-        throw error;
-      }
+      await durableReplace(this.filename(date), JSON.stringify(value));
     });
     this.chain = operation;
     await operation;

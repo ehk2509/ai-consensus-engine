@@ -67,6 +67,8 @@ export interface DebateSession {
   createdAt: string;
   updatedAt: string;
   finishedAt?: string;
+  /** Absolute deadline from first execution: includes downtime and manual review. */
+  executionDeadlineAt?: string;
   status: DebateStatus;
   /** Outcome of deliberation, distinct from the M3 council verdict and live execution status. */
   debateStatus?: DebateStatus;
@@ -318,14 +320,28 @@ export async function executeDebate(
     await notify(session, publisher, { type: 'finished' });
     return session;
   }
+  // A session gets ONE wall-clock deadline on its first execution. Downtime and
+  // human approval time count toward that deadline (conservative no-extension policy).
+  const firstStart = Date.now();
+  if (!session.executionDeadlineAt) {
+    session.executionDeadlineAt = new Date(firstStart + (session.request.maxDurationMs ?? 900000)).toISOString();
+  }
+  const deadlineMs = Date.parse(session.executionDeadlineAt);
+  if (!Number.isFinite(deadlineMs) || deadlineMs <= firstStart) {
+    session.status = 'budget_exhausted';
+    session.error = 'The original wall-clock deadline expired; resuming cannot extend the time budget.';
+    session.phase = null;
+    session.finishedAt = new Date().toISOString();
+    await notify(session, publisher, { type: 'finished' });
+    return session;
+  }
   const controller = new AbortController();
   let timedOut = false;
   const onCancel = () => controller.abort();
   if (externalSignal?.aborted) controller.abort();
   externalSignal?.addEventListener('abort', onCancel, { once: true });
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, session.request.maxDurationMs ?? 900000);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(1, deadlineMs - Date.now()));
   const signal = controller.signal;
-  const deadlineMs = Date.now() + (session.request.maxDurationMs ?? 900000);
   session.status = 'running';
   try {
     await notify(session, publisher, { type: 'started' });

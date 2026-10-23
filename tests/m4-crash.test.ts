@@ -52,7 +52,7 @@ test('actual SIGKILL during in-flight provider calls leaves durable uncertain in
       ['codex', { id: 'codex', propose: async () => { observedCalls.push('codex'); return 'response'; } }],
       ['claude', { id: 'claude', propose: async () => { observedCalls.push('claude'); return 'response'; } }],
     ]);
-    restarted = makeApp({ adapters, store: new DebateStore(directory) });
+    restarted = makeApp({ allowUnauthenticatedForTests: true, adapters, store: new DebateStore(directory) });
     const interrupted = await restarted.inject({ method: 'GET', url: '/api/debates/' + id });
     assert.equal((interrupted.json() as DebateSession).status, 'interrupted');
     const attempt = await restarted.inject({ method: 'POST', url: '/api/debates/' + id + '/resume', payload: {} });

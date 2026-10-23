@@ -45,7 +45,7 @@ process.stdin.on('end', () => {
       await chmod(path, 0o755);
     }
     process.env.PATH = bin + ':' + (originalPath ?? '');
-    app = makeApp({ adapters: createAdapters(12000), store: new DebateStore(join(root, 'data')) });
+    app = makeApp({ allowUnauthenticatedForTests: true, adapters: createAdapters(12000), store: new DebateStore(join(root, 'data')) });
     const request = { prompt: 'Analyze a small autonomous startup studio with risks', providers: ['codex', 'claude', 'gemini'], maxRounds: 1 };
     const m1 = await app.inject({ method: 'POST', url: '/api/brainstorms', payload: request });
     assert.equal(m1.statusCode, 200);

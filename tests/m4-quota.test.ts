@@ -54,7 +54,7 @@ test('API metering charges only accepted provider-call reservations even if deba
     ['codex', { id: 'codex', propose: async () => { actual++; return 'A'; } }],
     ['claude', { id: 'claude', propose: async () => { actual++; return 'B'; } }],
   ]);
-  const app = makeApp({ adapters, store: new DebateStore(dir), quotaLimits: { total: 2 } });
+  const app = makeApp({ allowUnauthenticatedForTests: true, adapters, store: new DebateStore(dir), quotaLimits: { total: 2 } });
   try {
     const result = await app.inject({ method: 'POST', url: '/api/debates', payload: {
       prompt: 'Assess accountable startup operations and economic viability',

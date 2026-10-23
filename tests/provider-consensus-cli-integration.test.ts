@@ -46,7 +46,7 @@ process.stdin.on('end', () => {
       await chmod(path, 0o755);
     }
     process.env.PATH = bin + ':' + (originalPath ?? '');
-    app = makeApp({ adapters: createAdapters(12000), store: new DebateStore(join(root, 'sessions')) });
+    app = makeApp({ allowUnauthenticatedForTests: true, adapters: createAdapters(12000), store: new DebateStore(join(root, 'sessions')) });
     const started = await app.inject({ method: 'POST', url: '/api/debates', payload: {
       prompt: 'Evaluate an AI startup studio and critical business risks',
       providers: ['codex', 'claude', 'gemini'], maxRounds: 1, consensus: true,

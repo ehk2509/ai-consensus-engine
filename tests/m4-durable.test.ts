@@ -32,7 +32,7 @@ test('durable queue auto-recovers never-issued queued jobs after worker process 
   const store = new DebateStore(dir);
   const session = createDebateSession(request);
   await store.save(session);
-  const app = makeApp({ store: new DebateStore(dir), adapters: adapters() });
+  const app = makeApp({ allowUnauthenticatedForTests: true, store: new DebateStore(dir), adapters: adapters() });
   try {
     const health = await app.inject({ method: 'GET', url: '/api/health' });
     assert.equal(health.statusCode, 200);
@@ -58,7 +58,7 @@ test('safe manual resume reuses completed model calls without duplicating provid
   });
   await store.save(session);
   const calls: Array<{ id: ProviderId; prompt: string }> = [];
-  const app = makeApp({ adapters: adapters((id, text) => calls.push({ id, prompt: text })), store: new DebateStore(dir) });
+  const app = makeApp({ allowUnauthenticatedForTests: true, adapters: adapters((id, text) => calls.push({ id, prompt: text })), store: new DebateStore(dir) });
   try {
     assert.equal((await app.inject({ method: 'GET', url: '/api/debates/' + session.id })).json().status, 'interrupted');
     const resumed = await app.inject({ method: 'POST', url: '/api/debates/' + session.id + '/resume', payload: {} });
@@ -85,7 +85,7 @@ test('uncertain externally issued calls fail closed until the operator explicitl
   });
   await store.save(session);
   const calls: string[] = [];
-  const app = makeApp({ store: new DebateStore(dir), adapters: adapters(id => calls.push(id)) });
+  const app = makeApp({ allowUnauthenticatedForTests: true, store: new DebateStore(dir), adapters: adapters(id => calls.push(id)) });
   try {
     const rejected = await app.inject({ method: 'POST', url: '/api/debates/' + session.id + '/resume', payload: {} });
     assert.equal(rejected.statusCode, 409);
