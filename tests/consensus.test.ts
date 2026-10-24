@@ -118,8 +118,8 @@ test('insufficient call budget skips voting without consuming model calls or rep
   assert.equal(session.calls, 15);
 });
 
-test('invalid structured facilitator response prevents ballots', async () => {
-  const session = createDebateSession(request());
+test('invalid structured facilitator response prevents ballots when fallback is disabled', async () => {
+  const session = createDebateSession(request({ synthesisFallback: false }));
   await executeDebate(session, agents((id, prompt) => prompt.includes('Stage: CONSENSUS DRAFT')
     ? 'A Markdown paragraph, not the requested object'
     : answer(id, prompt)), async () => {});
