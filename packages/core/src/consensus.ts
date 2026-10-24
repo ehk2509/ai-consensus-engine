@@ -1044,7 +1044,9 @@ export async function executeConsensus(
       const failures: string[] = [];
       let drafted = false;
       for (const provider of candidates) {
-        if (interrupted(signal, deadlineMs) || session.calls >= executionCallLimit(session.request)) break;
+        // A fully persisted result can be replayed without a new model-call slot.
+        // The invocation helper enforces limits only when it must issue a NEW call.
+        if (interrupted(signal, deadlineMs)) break;
         let rawDraft: string;
         try {
           rawDraft = await invokeInitialConsensus(session, state, 'synthesis', provider,
