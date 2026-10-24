@@ -7,7 +7,7 @@ const adapter = (id: AgentAdapter['id'], propose: AgentAdapter['propose']): Agen
 
 test('validates prompt and unique known providers', () => {
   assert.deepEqual(validateRequest({ prompt: '  A new product idea  ', providers: ['codex', 'gemini'] }), { prompt: 'A new product idea', providers: ['codex', 'gemini'] });
-  for (const value of [null, {}, { prompt: 'short', providers: ['codex'] }, { prompt: 'This is a valid idea', providers: [] }, { prompt: 'This is a valid idea', providers: ['codex', 'codex'] }, { prompt: 'This is a valid idea', providers: ['unknown'] }, { prompt: 'X'.repeat(12001), providers: ['claude'] }]) {
+  for (const value of [null, {}, { prompt: 'short', providers: ['codex'] }, { prompt: 'This is a valid idea', providers: [] }, { prompt: 'This is a valid idea', providers: ['codex', 'codex'] }, { prompt: 'This is a valid idea', providers: ['unknown'] }, { prompt: 'X'.repeat(1000001), providers: ['claude'] }]) {
     assert.throws(() => validateRequest(value));
   }
 });
