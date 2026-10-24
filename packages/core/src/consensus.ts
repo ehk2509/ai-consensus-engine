@@ -1011,7 +1011,15 @@ export async function executeConsensus(
           if (!['disputed', 'blocked'].includes(state.status)) break;
           continue;
         }
-        if (prior?.outcome === 'skipped' || prior?.outcome === 'failed') break;
+        if (prior?.outcome === 'skipped') break;
+        if (prior?.outcome === 'failed') {
+          const explicitlyRetried = state.negotiationCalls?.some(call =>
+            call.cycle === number && call.retryAuthorized);
+          const untouchedSynthesisProvider = session.request.synthesisFallback !== false &&
+            participants.some(provider => !state.negotiationCalls?.some(call =>
+              call.cycle === number && call.role === 're_synthesis' && call.provider === provider));
+          if (!explicitlyRetried && !untouchedSynthesisProvider) break;
+        }
         await executeNegotiationCycle(session, state, adapters, publish, signal, deadlineMs, number, shared);
         if (!['disputed', 'blocked'].includes(state.status)) break;
       }
