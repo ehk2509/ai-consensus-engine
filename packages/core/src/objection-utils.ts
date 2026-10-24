@@ -19,8 +19,7 @@ function unwrap(raw: string): string {
 function validateObjections(value: unknown): { records: Item[]; errors: string[] } | null {
   if (!object(value) || !Array.isArray(value.objections)) return null;
   const errors: string[] = [];
-  if (value.objections.length > 32) errors.push('More than 32 objections were returned; excess records require review.');
-  const records = value.objections.slice(0, 32).filter((item: unknown): item is Item => {
+  const records = value.objections.filter((item: unknown): item is Item => {
     if (!object(item) || typeof item.claim !== 'string' || !item.claim.trim() ||
         typeof item.criticism !== 'string' || !item.criticism.trim()) {
       errors.push('A malformed structured objection could not be accepted.');
@@ -50,7 +49,7 @@ function completeJsonObjectAt(text: string, begin: number): { end: number; json:
 function embeddedCritique(raw: string): { records: Item[]; errors: string[] } | null {
   // Move past rejected complete objects; do not mistake example JSON for the critique.
   let offset = 0;
-  for (let i = 0; i < 64 && offset < raw.length; i++) {
+  while (offset < raw.length) {
     const start = raw.indexOf('{', offset);
     if (start < 0) break;
     const found = completeJsonObjectAt(raw, start);
@@ -73,7 +72,7 @@ function recoverObjects(raw: string): Item[] {
   const start = found.index + found[0].length;
   const recovered: Item[] = [];
   let depth = 0, begin = -1, quoted = false, escaped = false;
-  for (let i = start; i < raw.length && recovered.length < 32; i++) {
+  for (let i = start; i < raw.length; i++) {
     const char = raw[i];
     if (quoted) {
       if (escaped) escaped = false;
@@ -127,9 +126,6 @@ export function decodeCritique(raw: string): CritiqueDecode {
     status: incomplete ? 'incomplete' : 'invalid',
   };
 }
-function short(text: string, limit: number): string {
-  return text.length <= limit ? text : text.slice(0, limit) + ' [excerpt]';
-}
 export interface ContextPack {
   text: string;
   includedIds: string[];
@@ -139,33 +135,25 @@ export interface ContextPack {
 export const isOpenCriticalObjection = (o: DebateObjection): boolean =>
   (o.severity === 'high' || o.severity === 'unspecified') &&
   (o.kind === 'parsing_failure' || (o.authorStatus !== 'confirmed_resolved' && o.authorStatus !== 'superseded'));
-const critical = (o: DebateObjection) => o.severity === 'high' || o.severity === 'unspecified';
-/** JSON stays parseable: NEVER truncate the serialized JSON text in the middle of an objection. */
+
+/** Lossless shared ledger: every record and every text field is transmitted exactly.
+ * Historical maxChars arguments are accepted for compatibility, but never drop
+ * objections or shorten their evidence. If a provider cannot accept the payload,
+ * its call must fail visibly rather than silently evaluate an incomplete ledger.
+ */
 export function packObjections(
-  objections: readonly DebateObjection[], maxChars: number,
+  objections: readonly DebateObjection[], _maxChars?: number,
 ): ContextPack {
-  const prioritized = [...objections].sort((a, b) =>
-    Number(isOpenCriticalObjection(b)) - Number(isOpenCriticalObjection(a)) ||
-    Number(critical(b)) - Number(critical(a)) ||
-    b.round - a.round || a.id.localeCompare(b.id));
-  const records: Item[] = [], includedIds: string[] = [], omittedIds: string[] = [], omittedCriticalIds: string[] = [];
-  for (const o of prioritized) {
-    const item = {
-      id: o.id, round: o.round, author: o.author, target: o.target, severity: o.severity,
-      kind: o.kind ?? 'substantive',
-      // Compact, labeled excerpts keep *all* critical IDs and the largest possible
-      // number of noncritical records within a bounded shared review context.
-      // Do not imply that an excerpt reproduces the full original criticism.
-      claim: short(o.claim, critical(o) ? 125 : 85),
-      criticism: short(o.criticism, critical(o) ? 205 : 105),
-      authorStatus: o.authorStatus ?? 'open',
-    };
-    if (JSON.stringify([...records, item]).length <= maxChars) {
-      records.push(item); includedIds.push(o.id);
-    } else {
-      omittedIds.push(o.id);
-      if (isOpenCriticalObjection(o)) omittedCriticalIds.push(o.id);
-    }
-  }
-  return { text: JSON.stringify(records), includedIds, omittedIds, omittedCriticalIds };
+  const ordered = [...objections].sort((a, b) =>
+    a.round - b.round || a.id.localeCompare(b.id));
+  const records = ordered.map(o => ({
+    id: o.id, round: o.round, author: o.author, target: o.target,
+    severity: o.severity, kind: o.kind ?? 'substantive',
+    claim: o.claim, criticism: o.criticism, evidence: o.evidence,
+    suggestedChange: o.suggestedChange, response: o.response,
+    resolution: o.resolution, authorStatus: o.authorStatus ?? 'open',
+    sourceEntryId: o.sourceEntryId,
+  }));
+  return { text: JSON.stringify(records), includedIds: ordered.map(o => o.id),
+    omittedIds: [], omittedCriticalIds: [] };
 }
