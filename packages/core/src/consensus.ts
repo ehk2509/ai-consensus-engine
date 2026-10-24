@@ -988,9 +988,24 @@ export async function executeConsensus(
       }
       return;
     }
-    if ((session.request.maxCalls ?? 40) - session.calls < participants.length + 1) {
+    // Reserve only *new* provider calls. Full journaled responses and frozen
+    // parsed ballots cost zero model calls on recovery, even when maxCalls is
+    // nearly exhausted. Rejected/uncertain records never count as reusable.
+    const journal = state.callJournal ?? [];
+    const savedSynthesis = journal.some(c => c.stage === 'synthesis' &&
+      c.status === 'fulfilled' && !c.retryAuthorized && !!c.rawResponse);
+    const needSynthesis = !state.draft?.proposal?.trim() && !savedSynthesis ? 1 : 0;
+    const missingVotes = participants.filter(provider => {
+      if (state.votes.some(v => v.provider === provider && v.status === 'fulfilled' &&
+          v.draftSha256 === state.draft?.sha256)) return false;
+      return !journal.some(c => c.stage === 'vote' && c.provider === provider &&
+        c.status === 'fulfilled' && !c.retryAuthorized && !!c.rawResponse &&
+        (!state.draft?.sha256 || c.frozenDraftSha256 === state.draft.sha256));
+    }).length;
+    const requiredCalls = needSynthesis + missingVotes;
+    if ((session.request.maxCalls ?? 40) - session.calls < requiredCalls) {
       state.status = 'not_assessed';
-      state.reason = `Insufficient call budget: need ${participants.length + 1} additional calls for a draft and independent votes.`;
+      state.reason = `Insufficient call budget: ${requiredCalls} new calls are needed after reusing saved synthesis and ballots.`;
       return;
     }
     if (signal.aborted) {

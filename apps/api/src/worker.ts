@@ -129,7 +129,8 @@ export class DurableDebateWorker {
     if (!Number.isFinite(deadline) || deadline <= Date.now()) {
       return conflict('The original session deadline has expired; resuming cannot extend it. Start a new run.');
     }
-    if (session.calls >= (session.request.maxCalls ?? 40)) return conflict('The original model-call budget has been exhausted.');
+    // Exhausted budgets may still reconstruct fully persisted outputs at zero cost.
+    // Explicit retries are checked against the remaining budget below.
     const debateCalls = uncertainDebateEntries(session);
     const ledger = [...(consensus?.callJournal ?? []), ...(consensus?.negotiationCalls ?? [])];
     const unknown = ledger.filter(c => c.status === 'issued' && !c.retryAuthorized);

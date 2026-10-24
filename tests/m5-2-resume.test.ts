@@ -259,3 +259,59 @@ test('M5.2 refuses to restart a cold-restart issued ballot until its exact ID is
     assert.ok(done.consensus?.callJournal?.some(c=>c.id===vote.id&&c.retryAuthorized));
   });
 });
+
+test('M5.2 resumes with only one available model-call slot and preserves completed ballots', async()=>{
+  const session=await baseline((id,prompt)=>prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')
+    ? JSON.stringify({verdict:'accept',rationale:'All approval conditions are met.',
+      concerns:[],resolvedObjectionIds:[],supersessions:[]}) : respond(id,prompt));
+  assert.equal(session.consensus?.status,'unanimous');
+  const callsBefore=session.calls;
+  session.request.maxCalls=callsBefore+1;
+  const sha=session.consensus!.draft!.sha256;
+  session.consensus!.votes=session.consensus!.votes.filter(v=>v.provider!=='claude');
+  const journal=session.consensus!.callJournal!.find(c=>c.stage==='vote'&&c.provider==='claude')!;
+  journal.status='rejected'; journal.rawResponse=undefined;
+  session.consensus!.status='incomplete';
+  session.status='completed';session.finishedAt=undefined;
+  let repeats=0;
+  await withServer(session,(id,prompt)=>{
+    repeats++;
+    return prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')
+      ? JSON.stringify({verdict:'accept',rationale:'All approval conditions are met.',
+          concerns:[],resolvedObjectionIds:[],supersessions:[]}) : respond(id,prompt);
+  },async(app)=>{
+    const resp=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',
+      payload:{retryCallIds:[journal.id],acknowledgeMayRepeatCall:true}});
+    assert.equal(resp.statusCode,202);
+    const done=await completed(app,session.id);
+    assert.equal(done.consensus?.status,'unanimous');
+    assert.equal(done.calls,callsBefore+1);
+    assert.equal(done.consensus?.draft?.sha256,sha);
+    assert.equal(repeats,1);
+  });
+});
+test('M5.2 reconstructs a saved synthesis and all votes when the model budget is already spent', async()=>{
+  const session=await baseline((id,prompt)=>prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')
+    ? JSON.stringify({verdict:'accept',rationale:'All approval conditions are met.',
+      concerns:[],resolvedObjectionIds:[],supersessions:[]}) : respond(id,prompt));
+  assert.equal(session.consensus?.status,'unanimous');
+  const callsBefore=session.calls;
+  const sha=session.consensus!.draft!.sha256;
+  session.request.maxCalls=callsBefore;
+  session.consensus!.draft=undefined;
+  session.consensus!.votes=[];
+  session.consensus!.status='drafting';
+  session.status='running';
+  session.finishedAt=undefined;
+  let repeats=0;
+  await withServer(session,(id,prompt)=>{repeats++;return respond(id,prompt);},async(app)=>{
+    const result=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',payload:{}});
+    assert.equal(result.statusCode,202);
+    const done=await completed(app,session.id);
+    assert.equal(done.consensus?.status,'unanimous');
+    assert.equal(done.consensus?.draft?.sha256,sha);
+    assert.equal(done.calls,callsBefore);
+    assert.equal(repeats,0);
+    assert.equal(done.consensus?.callJournal?.filter(c=>c.status==='fulfilled').length,4);
+  });
+});
