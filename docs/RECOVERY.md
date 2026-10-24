@@ -11,6 +11,7 @@ The local worker persists a write-ahead record **before** an external CLI call. 
 - For a missing initial draft, safely use the next untouched selected synthesis provider or require just one explicitly authorized failed-synthesis retry when all providers have failed. Never erase the failed facilitator's journal.
 - Reuse completed independent votes **only when their draft SHA-256 matches** the frozen synthesis.
 - Restore completed targeted negotiations and re-votes without replaying already-fulfilled provider work.
+- Retry a failed negotiated re-synthesis from a complete journal with only one authorized rejected synthesis UUID while keeping earlier targeted revisions and original ballots.
 - Reconstruct complete journaled responses when the provider result was saved but the parsed stage artifact had not yet been committed.
 
 **No AI call is silently replayed** when its execution status is uncertain. Its provider may already have processed or billed it.
@@ -73,7 +74,7 @@ A fully saved synthesis/ballot set can be reconstructed with **zero additional p
 ## Cases intentionally rejected
 
 - An **issued/uncertain provider call** without its exact ID and explicit user acknowledgement.
-- All selected synthesis providers already failed and no rejected synthesis UUID has been authorized for retry. One such authorization suffices (not all), but every earlier attempt remains in the audit.
+- All selected initial or negotiated synthesis providers already failed and no rejected synthesis UUID has been authorized for retry. One such authorization per unfinished synthesis stage suffices (not all), but every earlier attempt remains in the audit.
 - A failed critique or earlier step when successfully recorded later stages depend on it and would become inconsistent after replay.
 - Legacy consensus runs without enough write-ahead information to distinguish saved results from possibly billed calls.
 - A finite session with an expired deadline, or a requested retry beyond its remaining call cap.
