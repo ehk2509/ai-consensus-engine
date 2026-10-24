@@ -295,7 +295,8 @@ ${state.negotiationHistory?.length ? state.negotiationHistory.map(cycle =>
   '; re-vote: ' + (cycle.newVotes?.map(v => v.provider + '=' + (v.verdict ?? 'invalid')).join(', ') ?? 'not held')).join('\n') : 'No negotiation cycles requested or attempted.'}
 
 ${state.negotiationCalls?.length ? 'M5 provider-call journal (issued before each CLI): ' +
-  state.negotiationCalls.map(call => call.cycle + '/' + call.role + '/' + call.provider + '=' + call.status + ' (' + call.id + ')').join('; ') : 'No M5 provider calls made.'}
+  state.negotiationCalls.map(call => call.cycle + '/' + call.role + '/' + call.provider + '=' + call.status + ' (' + call.id +
+  '; timeout ms: ' + (call.timeoutMs ?? 'legacy/unknown') + (call.error ? '; error: ' + call.error : '') + ')').join('; ') : 'No M5 provider calls made.'}
 
 ## Durable recovery audit (M5.2)
 
@@ -593,8 +594,10 @@ async function negotiateCall(
     const adapter = adapters.get(provider);
     if (!adapter) throw new Error('Missing provider adapter.');
     const timeoutMs = Math.max(1, Math.min(
-      recommendedTurnTimeoutMs(role === 're_synthesis' ? 'synthesis' : 'vote', session.request.maxRounds),
+      recommendedTurnTimeoutMs(role === 're_synthesis' ? 'synthesis' : 'vote',
+        session.request.maxRounds, session.request.synthesisTimeoutMs),
       deadlineMs === undefined ? Infinity : deadlineMs - Date.now()));
+    record.timeoutMs = timeoutMs;
     const raw = await adapter.propose(prompt, signal, { timeoutMs });
     if (signal.aborted || !raw.trim()) throw new Error('Negotiation call cancelled or empty.');
     record.status = raw.length <= 40000 ? 'fulfilled' : 'rejected';
