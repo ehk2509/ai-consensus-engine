@@ -4,7 +4,7 @@
 
 Local-first, multi-provider brainstorming and structured AI deliberation powered by your installed **OpenAI Codex**, **Claude Code**, and **Gemini through Antigravity** CLI sessions.
 
-> **Current milestone: M4 — durable, locally authenticated execution (v0.4.0).** Following independent proposals, critiques, rebuttals and revisions, the optional M3 council drafts a shared proposal, gathers independently structured votes, and produces a transparent decision record. Agreement is never fabricated when ballots fail or critical concerns remain.
+> **Current release: M5.3 — unlimited execution budget by default (v0.5.3).** The council supports independent proposals, multi-round critique, a traceable synthesis, independent voting, bounded negotiation, and explicit checkpoint-safe recovery. Agreement is never fabricated when ballots fail or critical concerns remain. Unlimited applies to the *overall session*, not provider accounts or individual CLI timeouts.
 
 ## Quick start
 
@@ -16,7 +16,12 @@ npm run dev
 # Open http://127.0.0.1:5173
 ```
 
-Select **Multi-round debate**, pick two or three agents, enter an idea and choose 1–3 rounds (default 1). For a quick side-by-side response without further agent calls, switch to **Independent proposals**. Remote Vite development is deliberately disabled: proxying the unauthenticated API through a public Vite listener would expose privileged operations.
+Select **Multi-round debate**, pick two or three agents, enter an idea and choose 1–3 rounds (default 1). **Execution budget is Unlimited by default**; uncheck *Unlimited calls and session duration* to enter your own Max calls and Minutes. The UI enables independent consensus voting and one negotiation cycle by default. For a quick side-by-side response without further agent calls, switch to **Independent proposals**. Remote Vite development is deliberately disabled: proxying the unauthenticated API through a public Vite listener would expose privileged operations.
+
+## Documentation
+
+- [Execution budget](docs/EXECUTION_BUDGET.md) — unlimited defaults, finite custom limits, API compatibility, quota safeguards, examples and troubleshooting
+- [Safe resume and recovery](docs/RECOVERY.md) — preserving checkpoints, explicit call retries, deadline differences and HTTP 409 recovery errors
 
 ## How M2 debates work
 
@@ -30,7 +35,7 @@ Each targeted critique requests structured JSON objections, with stable IDs and 
 
 Critiques for one provider are deliberately serialized to avoid launching multiple concurrent sessions under that same CLI account; different providers can work in parallel. When a provider fails, the session keeps successful results and does not invent missing replies. If fewer than two initial proposals succeed, no debate is attempted. **Unanimity is neither calculated nor asserted in M2.**
 
-**Usage:** with three providers, a single round makes up to 15 model calls (3 proposals, 6 targeted critiques, 3 rebuttals, 3 revisions). Two rounds can make up to 27 calls. Each call can consume account quota or incur costs depending on your CLI and provider terms. A debate defaults to a **40-call** and **15-minute** total budget, configurable up to 40 calls and 30 minutes; selecting two or three rounds in the UI adjusts the suggested time budget to 20 or 30 minutes. Budget exhaustion is reported distinctly. Cancel an active session using the UI or API.
+**Usage:** with three providers, a single round normally needs up to 15 debate calls (3 proposals, 6 targeted critiques, 3 rebuttals, 3 revisions); two rounds up to 27, three up to 39. Consensus synthesis and voting require more calls, and negotiation/clarification/sign-off can add further calls. **New runs have no overall model-call or duration cap by default.** Disable Unlimited to set 2–10,000 maximum model calls and 1–10,080 total minutes (UI limits). Provider-level timeouts, account quotas and potential charges still apply in unlimited mode. Cancel an active session using the UI or API. Read [Execution budget](docs/EXECUTION_BUDGET.md) before starting expensive runs.
 
 ## API
 
@@ -65,7 +70,7 @@ Turn on **Generate independent consensus votes** (enabled by default in the Vue 
 
 High-severity and unstructured objections from **every debate round** remain open until their original authors confirm resolution in a valid accept ballot or explicitly supersede them with a newer authored objection. A target model's self-reported rebuttal is not proof of resolution. A malformed nonempty critique list becomes an unresolved objection instead of disappearing. With the critical gate disabled, unresolved concerns remain visible and downloadable but do not block the selected voting policy. Outcomes are `unanimous`, `qualified`, `disputed`, `blocked`, `incomplete` or `not_assessed`. All dissent and objection IDs remain visible.
 
-With three models and one round, voting takes **19 calls** total (15 debate + 1 draft + 3 ballots). With three rounds, M2 alone may reach 39 calls, exceeding the 40-call cap once consensus is included. In that case M3 is `not_assessed`. Reduce rounds, choose fewer models, or keep M3 off; the product never silently increases the session's call budget.
+With three models and one round, the debate plus initial synthesis/voting normally takes **19 calls** (15 debate + 1 draft + 3 ballots). Three rounds alone can require 39 calls before voting, which **unlimited mode permits**. A **custom finite** budget that cannot accommodate synthesis or voting may yield `not_assessed`; additional negotiation, clarification and sign-off calls must also fit within the configured budget. Limits are never silently increased.
 
 Every session keeps separate `debateStatus`, live execution `status` and `consensus.status` fields. The session JSON also retains bounded raw model ballots and facilitator output, SHA-256 hashes of the frozen draft and prompts, and provenance `model:unreported` when the CLI does not expose a trustworthy model label. These are **local plaintext records**, so protect the data folder.
 
@@ -75,7 +80,7 @@ Evidence claims in a generated draft are recorded as **unverified**. The app doe
 
 Snapshots are atomically persisted after each stage and each agent response, by default under `.ace-data/debates/<uuid>.json`, which is gitignored. Override storage with `ACE_DATA_DIR=/private/path`. Session files contain the original idea, proposals, structured objections, critiques, rebuttals and revisions **in plain text**; protect this folder if your ideas are confidential.
 
-A process restart during an unfinished session preserves completed responses but marks the old run **interrupted** when loaded. Cancelling or exceeding a time/call budget terminates active CLI process groups where supported and preserves the partial timeline. Safe recovery of never-issued queued work and operator-authorized, partially completed queued resumes is implemented in M4; manually resuming interrupted debate stages preserves finished calls. Uncertain in-flight calls require explicit authorization before retry; no silent replay is allowed. Only one worker process may own the data directory.
+A restart preserves completed checkpoints. **M5.2 recovery** can resume eligible interrupted debate, synthesis, independent voting and negotiation stages without rerunning successful calls; possibly executed failed/uncertain CLI calls require explicit operator authorization by exact call ID. A session in Unlimited mode has **no overall execution deadline**, while an existing custom-limited session keeps its original deadline and call usage. Cancellation and finite-budget exhaustion preserve a partial timeline. Terminal decisions remain immutable; legacy sessions missing safe journals can return HTTP 409. See [Safe resume and recovery](docs/RECOVERY.md). Only one worker process may own the data directory.
 
 ## Limits and security
 
@@ -83,7 +88,7 @@ A process restart during an unfinished session preserves completed responses but
 - CLI processes run in empty temporary directories with best-effort read-only / plan-mode limitations. User-configured CLI hooks, extensions and tools may still have side effects; **this is not a hardened sandbox**.
 - Provider material is delimited and explicitly labeled untrusted. This mitigates but cannot eliminate prompt injection.
 - Incoming user prompts are limited to 12,000 characters. Outputs stored for each turn are capped at 25,000 characters and peer context is further bounded; trimming is labeled.
-- Execution limits are per CLI invocation and per complete debate. Proposal/critique/rebuttal turns have a 150-second cap; revisions receive 180/210/240 seconds for rounds 1/2/3; synthesis and ballots receive 210/180 seconds. Each cap is further reduced by the remaining session deadline. Provider output is bounded at 8 MiB of raw stdout; per-turn stored text remains capped at 25,000 characters. Verbose stderr is drained without exposing CLI diagnostics or treating progress logging as an output-size failure. Higher round counts greatly increase total calls and quota consumption, and default automatic retries are deliberately disabled to avoid hidden model usage.
+- CLI invocation limits apply **regardless of the overall budget mode**. Proposal/critique/rebuttal turns have a 150-second cap; revisions receive 180/210/240 seconds for rounds 1/2/3; synthesis and ballots receive their own bounded timeouts. In finite mode each per-call timeout is further reduced by the remaining session deadline; unlimited mode has no session-wide deadline. Provider output is bounded at 8 MiB of raw stdout; per-turn stored text remains capped at 25,000 characters. Verbose stderr is drained safely. High round counts may consume substantial provider quota, and failed calls are not silently retried.
 - Responses are displayed as sanitized Markdown with DOMPurify. Raw provider stderr is never sent to clients.
 
 ## Development and CI
@@ -101,8 +106,13 @@ Tech stack: Fastify, Vue 3/Vite, TypeScript, Node test runner, local CLI adapter
 
 - **M1:** Three independent providers, parallel proposals and local UI — implemented
 - **M2:** Cross-review, rebuttals, revisions, history and live progress — merged
-- **M3:** Explicit voting, traceable evidence claims, dissent and qualified consensus reports — implemented in this PR
-- **M4:** v0.4.0 durable local queue, checkpoint journaling, explicit crash recovery, default token authentication, single-writer locking, metrics and failure tests. Further hardening (hardened sandboxes, direct API providers, comprehensive performance benchmarks) remains outstanding.
+- **M3:** Explicit voting, traceable evidence claims, dissent and qualified consensus reports — merged
+- **M4–M4.2:** Durable local execution, authenticated queue, parser resilience, objection integrity and verified coverage — merged
+- **M5–M5.1:** Targeted negotiation, frozen revised drafts, independent re-voting, draft-specific sign-offs and reliability hardening — merged
+- **M5.2:** Checkpoint-safe debate and consensus resume with explicit uncertain-call authorization — merged
+- **M5.3 (current):** Unlimited session execution budget by default, with opt-in custom call/time caps — merged
+
+Further work includes authenticated three-provider live smoke tests, hardened sandboxes, direct provider API integration, independent evidence verification and performance benchmarks.
 
 The goal is a **traceable, defensible decision**, not artificial agreement.
 
@@ -132,7 +142,7 @@ CI exercises persistent objections from prior rounds, malformed critique inputs,
 
 ## Long-session reliability
 
-Earlier versions used a fixed **90-second** CLI timeout, a **768 KiB** process-stdout cap, and a **32 KiB** stderr cap; long third-round revisions could therefore fail even when providers were functioning. The current version applies phase-aware timeouts, a bounded **8 MiB** raw-response allowance (including provider protocol events), safe stderr draining, explicit response brevity limits, and shorter debate-context excerpts. The overall user-selected duration limit still takes precedence. No failed historical session is rewritten, resumed or silently retried; its timeline remains an auditable partial result. Start a new run with a larger configured total duration if necessary.
+Earlier versions used a fixed **90-second** CLI timeout, a **768 KiB** process-stdout cap, and a **32 KiB** stderr cap; long third-round revisions could fail even when providers were functioning. The current version uses phase-aware per-call timeouts, a bounded **8 MiB** raw-response allowance, safe stderr draining, explicit brevity limits and shorter context excerpts. An optional **finite** session-wide deadline further constrains those calls; Unlimited mode has no such deadline. Historical session records remain auditable; M5.2 can resume eligible interrupted sessions from verified checkpoints, without silently replaying uncertain calls. See [Safe resume and recovery](docs/RECOVERY.md).
 
 ## M3.1 — Consensus reliability and objection integrity
 
@@ -152,7 +162,7 @@ The `blocked_by_unparseable_evidence` verdict explicitly distinguishes parser/in
 
 **Write-ahead call journal:** Every provider invocation first persists an `issued` entry and reserves a call-budget slot. If a process dies before recording the response, its status is uncertain: the provider may have processed and billed the call. `POST /api/debates/:id/resume` rejects an uncertain call until the operator explicitly provides `retryCallIds` and `acknowledgeMayRepeatCall:true`. Prior entries remain in the audit trail and consume their original call-budget reservations. Completed calls are never auto-replayed; previously completed stage records are reused.
 
-**Limitations:** M4 recovery covers debate proposal/critique/rebuttal/revision steps. Interrupted synthesis and consensus votes are not auto-replayed; they require a new run. There is no multi-host/distributed worker, hardened CLI container/VM isolation, direct hosted provider API integration or external tracing backend yet. A clean server shutdown cancels the active session but leaves not-yet-started queued work for a future restart. These areas remain necessary for a production-grade deployment.
+**M4 historical limitation:** At v0.4.0, synthesis and votes could not be safely resumed. **M5.2 supersedes that restriction:** eligible journaled synthesis, ballots and negotiation checkpoints now support explicit safe recovery. Legacy unjournaled work still fails closed. The application does not provide multi-host/distributed execution, hardened CLI VM/container isolation, hosted provider API integration, or an external tracing backend.
 
 ### Daily provider call quotas
 
@@ -161,8 +171,8 @@ To cap usage across restarts, configure an integer `ACE_DAILY_CALL_LIMIT` and/or
 ## M4 review hardening: failure safety and limits
 
 - **OS lock:** a native advisory lock is retained by a helper process tied to the server's stdin pipe (POSIX `flock`, Windows PowerShell FileStream exclusive handle). Kernel cleanup on process death avoids unsafe stale-PID unlinking; do not place the data directory on unsupported network filesystems. Only one owner can start on the same host/storage volume.
-- **One immutable deadline:** `executionDeadlineAt` is assigned before the first stage and preserved across all resumes. Queued time before first execution does not count; time spent running, offline, or awaiting manual approval **does** count. An expired deadline returns `budget_exhausted` without making provider calls.
-- **Unbounded recovery scan:** startup examines all queued session files, regardless of the number of older completed sessions, and recovers previously authorized queued resumes containing completed steps. It still refuses unapproved uncertain calls and crashed consensus-stage execution.
+- **Immutable deadline for custom-limited sessions:** In finite mode, `executionDeadlineAt` is assigned before the first stage and preserved across resumes. Queued time before execution does not count; time spent running, offline, or awaiting approval **does** count. **Unlimited sessions do not receive an overall execution deadline.** Per-CLI timeouts and explicit cancellation still apply.
+- **Unbounded recovery scan:** startup examines queued session files and recovers authorized queued work containing completed steps. It still refuses unapproved uncertain calls. Crash-interrupted consensus stages use M5.2 journals and frozen checkpoints; unjournaled or unsafe recovery fails closed.
 - **Process death:** each spawned CLI has a dedicated independent parent-death watchdog that terminates its POSIX process group (or Windows taskkill tree) if the API process unexpectedly disappears. This mitigates orphaned CLIs but is not the same as a hardened cgroup, job object, VM, or container boundary; there is a brief guardian-startup race and CLI descendants that deliberately detach into different process groups may escape. Use OS-level cgroups/job objects for high-assurance containment.
 - **Disk durability:** session/usage snapshots use temporary files, explicit file sync, atomic replacement and POSIX directory-metadata sync before acknowledging writes. Disk firmware, exotic filesystems, and Windows directory sync behavior are not covered by this guarantee.
 - **Authentication:** production `makeApp()` construction fails without a token; test code must explicitly opt into `allowUnauthenticatedForTests`. This reduces the risk that a new server entrypoint accidentally disables protection.
@@ -187,11 +197,11 @@ The previous decision report disclosed 63 omitted objections (13 critical), whil
 
 ## M5 — Intelligent Consensus Negotiation (v0.5.0)
 
-**Opt-in bounded negotiated cycles.** Set `negotiationCycles` to `0` (API compatibility default), `1`, or `2` on a debate with `consensus:true`. The UI defaults to 1 cycle. After the initial frozen synthesis and independent votes, a disputed or substantively blocked outcome may initiate targeted revisions by each selected model; a neutral facilitator then creates a *new frozen synthesis*, and all agents cast *new independent votes tied to its SHA-256*. The older draft, ballots and objection IDs remain available as audit history. No vote carries over to a changed draft, and every model call counts toward the existing total call limit and 30-minute deadline.
+**Opt-in bounded negotiated cycles.** Set `negotiationCycles` to `0` (API compatibility default), `1`, or `2` on a debate with `consensus:true`. The UI defaults to 1 cycle. After the initial frozen synthesis and independent votes, a disputed or substantively blocked outcome may initiate targeted revisions by each selected model; a neutral facilitator then creates a *new frozen synthesis*, and all agents cast *new independent votes tied to its SHA-256*. The older draft, ballots and objection IDs remain available as audit history. No vote carries over to a changed draft. Model calls always count toward usage; session-wide call/time limits apply **only when a custom finite budget is selected**.
 
-**Hard limits and honest abstention.** One cycle requires `2 * providers + 1` additional calls; if that cannot fit, the cycle is recorded as skipped and the prior verdict remains. A failed targeted revision/synthesis preserves the prior frozen draft and votes without claiming consensus. A re-vote failure cannot be filled from the original vote. Cycles stop on consensus, exhausted budgets or unverified critical context. Parsing-failure sentinels and omitted critical context prevent negotiated acceptance rather than being 'fixed' by a persuasive rewrite. The original objection authors must explicitly sign off individual critical objection IDs; a new draft alone does not close them.
+**Bounded negotiation and honest abstention.** One cycle requires `2 * providers + 1` additional calls. In **finite** mode, a cycle that cannot fit the remaining budget is skipped and the prior verdict remains. Unlimited mode removes only the session-wide call/time ceiling; negotiation still runs at most two cycles. A failed targeted revision/synthesis preserves the prior frozen draft and votes without claiming consensus. A re-vote failure cannot be filled from the original vote. Cycles stop on consensus, exhausted budgets or unverified critical context. Parsing-failure sentinels and omitted critical context prevent negotiated acceptance rather than being 'fixed' by a persuasive rewrite. The original objection authors must explicitly sign off individual critical objection IDs; a new draft alone does not close them.
 
-**Security:** The M5 additional provider calls use the same authenticated local CLI worker, quotas and call budget. Each M5 invocation is journaled as `issued` before execution and recorded as fulfilled/rejected. Consensus-stage crash recovery still fails closed and will never auto-replay an uncertain call. This is an in-process local-first negotiation workflow, not a distributed execution system.
+**Security:** The M5 additional provider calls use the same authenticated local CLI worker, per-provider timeouts and quota controls; finite session budgets apply only when enabled. Each M5 invocation is journaled as `issued` before execution and recorded as fulfilled/rejected. Consensus-stage crash recovery still fails closed and will never auto-replay an uncertain call. This is an in-process local-first negotiation workflow, not a distributed execution system.
 
 The debate report includes an M5 negotiation audit with original/follow-up vote outcomes and original/revised SHA-256 values. Old M4 runs and their reports are not rewritten.
 
@@ -213,7 +223,7 @@ Negotiated synthesis can optionally include an auditable `decisions` array conta
 
 ## M5.2 — Explicit, checkpoint-safe debate and consensus recovery
 
-Sessions persist provider-call intentions **before** invoking external CLI accounts, including initial consensus synthesis, independent ballots, and negotiated revisions/re-votes. The original wall-clock deadline and model-call budget remain binding; previous consumption is never reset. Successful proposals, complete votes, and frozen decision hashes are retained. A journal entry with unknown/failed provider outcome **cannot automatically replay**. The operator must provide its exact call ID and accept possible duplicate CLI charges.
+Sessions persist provider-call intentions **before** invoking external CLI accounts, including initial consensus synthesis, independent ballots, and negotiated revisions/re-votes. **Finite sessions** preserve their original wall-clock deadline and call cap; **unlimited sessions** have no session-wide deadline or maximum call count. Previous actual call consumption is never reset. Successful proposals, complete votes, and frozen decision hashes are retained. A journal entry with unknown/failed provider outcome **cannot automatically replay**. The operator must provide its exact call ID and accept possible duplicate CLI charges.
 
 ### Resume API
 
@@ -223,9 +233,11 @@ Sessions persist provider-call intentions **before** invoking external CLI accou
 
 **Consensus:** a complete saved synthesis or an independent ballot bound to the current frozen draft is reused. Durable response journals bridge crashes between a provider response and writing its parsed artifact. Invalid or potentially invoked calls require explicit authorization. An interrupted M5 cycle uses its saved revisions, candidate draft and vote records instead of restarting from zero.
 
-**Safety boundaries:** Older consensus sessions without sufficient write-ahead journals cannot be reconstructed; they return 409 rather than risking duplicate calls. Deadlines cannot be extended. Legacy sessions lacking a deadline derive a conservative one from their creation time. Call budgets and provider quota still count all retried calls. Rejected upstream work with successful downstream dependencies is not silently rewritten. Interrupted execution remains auditable in the local session JSON; neither external model correctness nor commercial usage rights are independently verified.
+**Safety boundaries:** Older consensus sessions without sufficient write-ahead journals cannot be reconstructed; they return 409 rather than risking duplicate calls. **Finite** deadlines cannot be extended; older **finite** sessions missing a persisted deadline derive a conservative one from creation time. Call budgets and provider quota still count all retried calls. Rejected upstream work with successful downstream dependencies is not silently rewritten. Interrupted execution remains auditable in the local session JSON; neither external model correctness nor commercial usage rights are independently verified.
 
 ## M5.3 — Unlimited execution budget by default
+
+**Full configuration and migration guide:** [Execution budget — defaults, UI, API and safe usage](docs/EXECUTION_BUDGET.md). **Recovery details:** [Safe resume and recovery](docs/RECOVERY.md).
 
 New multi-model debates use **unlimited execution budget** by default. This removes the session-wide maximum model-call count and wall-clock deadline, allowing the configured debate rounds and negotiated consensus stages to complete without the previous 40-call / 15-minute default. It **does not** remove the individual provider invocation timeouts, provider subscription quotas, charges, the fixed round count, negotiation cycle limits, or the user-controlled Cancel action.
 
