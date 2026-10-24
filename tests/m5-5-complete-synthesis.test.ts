@@ -25,7 +25,7 @@ const response = (id: ProviderId, prompt: string): string => {
 const agents = (fn: (id: ProviderId, prompt: string) => string) =>
   new Map<string, AgentAdapter>(providers.map(id => [id, { id, propose: async prompt => fn(id, prompt) }]));
 
-test('an oversized structured synthesis cannot be silently clipped and frozen for voting', async () => {
+test('long structured synthesis is preserved uncut and voted on with the complete SHA-bound draft', async () => {
   assert.ok(longDraft.length > 18000);
   const session = createDebateSession(request());
   const first = chooseFacilitator(session);
@@ -37,14 +37,13 @@ test('an oversized structured synthesis cannot be silently clipped and frozen fo
     return response(id, prompt);
   }), async () => {});
   assert.equal(session.consensus?.status, 'unanimous');
-  assert.notEqual(session.consensus?.draft?.author, first);
-  assert.equal(session.consensus?.draft?.proposal, brief);
+  assert.equal(session.consensus?.draft?.author, first);
+  assert.equal(session.consensus?.draft?.proposal, longDraft);
   assert.equal(voteCalls, 3);
   const calls = session.consensus?.callJournal?.filter(c => c.stage === 'synthesis') ?? [];
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0]?.status, 'rejected');
-  assert.match(calls[0]?.error ?? '', /validation/i);
-  assert.equal(calls[1]?.status, 'fulfilled');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.status, 'fulfilled');
+  assert.equal(JSON.parse(calls[0]!.rawResponse!).proposal, longDraft);
   assert.ok(!session.consensus?.draft?.proposal.includes('[Context truncated]'));
 });
 
@@ -61,7 +60,7 @@ test('an upstream truncation marker inside a well-formed JSON draft cannot be ap
   assert.equal(session.consensus?.callJournal?.[0]?.status, 'rejected');
 });
 
-test('all oversized synthesis outputs fail closed without votes or author signoffs', async () => {
+test('all valid lengthy synthesis outputs are accepted without hiding any tail', async () => {
   const session = createDebateSession(request());
   let votes = 0;
   await executeDebate(session, agents((id, prompt) => {
@@ -70,11 +69,10 @@ test('all oversized synthesis outputs fail closed without votes or author signof
     if (prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')) votes++;
     return response(id, prompt);
   }), async () => {});
-  assert.equal(session.consensus?.status, 'incomplete');
-  assert.equal(session.consensus?.draft, undefined);
-  assert.equal(votes, 0);
-  assert.equal(session.consensus?.callJournal?.filter(x => x.stage === 'synthesis' && x.status === 'rejected').length, 3);
-  assert.match(session.consensus?.reason ?? '', /oversized or truncated/);
+  assert.equal(session.consensus?.status, 'unanimous');
+  assert.equal(session.consensus?.draft?.proposal, longDraft);
+  assert.equal(votes, 3);
+  assert.equal(session.consensus?.callJournal?.filter(x => x.stage === 'synthesis' && x.status === 'fulfilled').length, 1);
 });
 
 test('even if the model omits the objection table, the decision report indexes every original ID', async () => {
@@ -97,7 +95,7 @@ test('even if the model omits the objection table, the decision report indexes e
   assert.ok(!session.consensus?.draft?.proposal.includes('Missing evidence of consumer API equivalence'));
 });
 
-test('oversized negotiated targeted revision cannot become a successful input to a new draft', async () => {
+test('long negotiated targeted revision is retained in full for downstream synthesis', async () => {
   const session = createDebateSession(request({ negotiationCycles: 1 }));
   let revisedDraftCalls = 0;
   await executeDebate(session, agents((id, prompt) => {
@@ -110,7 +108,8 @@ test('oversized negotiated targeted revision cannot become a successful input to
     return response(id, prompt);
   }), async () => {});
   assert.equal(session.consensus?.status, 'disputed');
-  assert.equal(revisedDraftCalls, 0);
+  assert.equal(revisedDraftCalls, 3);
   assert.equal(session.consensus?.negotiationHistory?.[0]?.outcome, 'failed');
-  assert.equal(session.consensus?.negotiationCalls?.find(x => x.role === 'targeted_revision')?.status, 'rejected');
+  assert.equal(session.consensus?.negotiationCalls?.find(x => x.role === 'targeted_revision')?.status, 'fulfilled');
+  assert.ok(session.consensus?.negotiationHistory?.[0]?.revisions.every(x => x.proposal === longDraft));
 });
