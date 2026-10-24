@@ -113,8 +113,13 @@ export class DurableDebateWorker {
     }
     const reviewInterrupted = session.status === 'cancelled' && !!consensus?.callJournal?.some(c =>
       c.stage === 'resolution' && c.status === 'issued');
+    // A failed M5 synthesis/revision left its original ballots as historical
+    // context, but is not a settled negotiated decision. Explicitly authorize
+    // the failed call before reopening that specific unfinished cycle.
+    const failedNegotiation = !!consensus?.negotiationHistory?.some(c => c.outcome === 'failed' &&
+      consensus.negotiationCalls?.some(call => call.cycle === c.number && call.status === 'rejected'));
     if (consensus && ['unanimous', 'qualified', 'disputed', 'blocked', 'blocked_by_unparseable_evidence'].includes(consensus.status) &&
-        !['running', 'interrupted', 'queued'].includes(session.status) && !reviewInterrupted) {
+        !['running', 'interrupted', 'queued'].includes(session.status) && !reviewInterrupted && !failedNegotiation) {
       return conflict('The recorded consensus decision is final. Create a new debate to re-evaluate it.');
     }
     // Unlimited sessions have no session-wide expiry, but retain exact call
@@ -178,20 +183,32 @@ export class DurableDebateWorker {
         v.draftSha256 === cycle?.revisedDraftSha256);
       return false;
     });
-    // Any ONE explicitly authorized rejected synthesis call can seed recovery.
-    // Untried fallback providers are new calls, not replays, and require no retry ID.
-    // Keep every prior rejection in the ledger for audit; never silently reissue it.
-    const failedSynthesis = requiredRejected.filter(c => 'stage' in c && c.stage === 'synthesis');
-    const untriedFallback = !!failedSynthesis.length && session.request.synthesisFallback !== false &&
-      session.request.providers.some(provider => !ledger.some(c => 'stage' in c &&
-        c.stage === 'synthesis' && c.provider === provider));
-    if (failedSynthesis.length && !untriedFallback &&
-        !failedSynthesis.some(c => requested.has(c.id))) {
-      return conflict('Choose at least one failed synthesis call for an explicit retry. Other attempts remain preserved.',
-        failedSynthesis.map(c => c.id));
+    // A failed synthesis needs only ONE operator-approved rejected UUID per
+    // draft stage, not all failed providers. Untried providers are new calls,
+    // not silent retries. This rule applies to both initial and M5 re-synthesis.
+    const synthesisFailures = requiredRejected.filter(c =>
+      ('stage' in c && c.stage === 'synthesis') ||
+      (!('stage' in c) && c.role === 're_synthesis'));
+    const groups = new Map<string, typeof synthesisFailures>();
+    for (const call of synthesisFailures) {
+      const group = 'stage' in call ? 'initial' : 'negotiation:' + call.cycle;
+      groups.set(group, [...(groups.get(group) ?? []), call]);
+    }
+    for (const [group, failed] of groups) {
+      const untriedFallback = session.request.synthesisFallback !== false &&
+        session.request.providers.some(provider => !ledger.some(c =>
+          c.provider === provider && (group === 'initial'
+            ? 'stage' in c && c.stage === 'synthesis'
+            : !('stage' in c) && c.role === 're_synthesis' &&
+                'negotiation:' + c.cycle === group)));
+      if (!untriedFallback && !failed.some(call => requested.has(call.id))) {
+        return conflict('Choose one failed synthesis call for an explicit retry. Earlier failed attempts remain auditable.',
+          failed.map(call => call.id));
+      }
     }
     const mandatory = [...debateCalls, ...unknown, ...requiredRejected.filter(c =>
-      !('stage' in c && c.stage === 'synthesis'))];
+      !(('stage' in c && c.stage === 'synthesis') ||
+        (!('stage' in c) && c.role === 're_synthesis')))];
     if (mandatory.some(e => !requested.has(e.id))) {
       return conflict('Uncertain or unresolved failed provider calls need exact IDs and explicit duplicate-charge authorization.',
         mandatory.map(e => e.id));
