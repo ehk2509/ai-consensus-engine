@@ -835,28 +835,46 @@ async function executeNegotiationCycle(
     candidate = state.draft!;
   } else {
   const prompt = negotiationSynthesisPrompt(state, cycle, shared);
-  let parsed: Record<string, unknown> | null;
-  let raw: string;
-  try {
-    raw = await negotiateCall(session, state, cycleNumber, 're_synthesis', facilitator,
-      prompt, adapters, publish, signal, deadlineMs);
-    parsed = parseJSON(raw);
-    if (!parsed || typeof parsed.proposal !== 'string' || parsed.proposal.trim().length < 10) {
-      invalidateNegotiationResponse(state, cycleNumber, 're_synthesis', facilitator);
-      throw new Error('Invalid negotiated synthesis.');
+  const preferredIndex = participants.indexOf(facilitator);
+  const synthesisProviders = session.request.synthesisFallback === false
+    ? [facilitator]
+    : [...participants.slice(preferredIndex), ...participants.slice(0, preferredIndex)];
+  let parsed: Record<string, unknown> | null = null;
+  let raw = '';
+  let draftedBy: ProviderId | undefined;
+  const errors: string[] = [];
+  for (const provider of synthesisProviders) {
+    if (interrupted(signal, deadlineMs)) break;
+    try {
+      const attemptedRaw = await negotiateCall(session, state, cycleNumber, 're_synthesis',
+        provider, prompt, adapters, publish, signal, deadlineMs);
+      const attemptedDraft = parseJSON(attemptedRaw);
+      if (!attemptedDraft || typeof attemptedDraft.proposal !== 'string' ||
+          attemptedDraft.proposal.trim().length < 10) {
+        invalidateNegotiationResponse(state, cycleNumber, 're_synthesis', provider);
+        throw new Error('Invalid negotiated synthesis.');
+      }
+      parsed = attemptedDraft;
+      raw = attemptedRaw;
+      draftedBy = provider;
+      break;
+    } catch (error) {
+      errors.push(provider + ': ' + safeError(error));
     }
-  } catch (error) {
+  }
+  if (!parsed || !draftedBy) {
     cycle.outcome = interrupted(signal, deadlineMs) ? 'interrupted' : 'failed';
     cycle.reason = cycle.outcome === 'interrupted'
       ? 'Negotiated synthesis interrupted by cancellation or deadline. Earlier verdict preserved as history.'
-      : 'No valid new synthesis. Original draft/votes preserved; no re-vote conducted.';
+      : 'No valid new synthesis after eligible providers (' + errors.join('; ') +
+        '). Original draft/votes preserved; no re-vote conducted.';
     state.status = cycle.outcome === 'interrupted' ? 'incomplete' : cycle.priorStatus;
     if (cycle.outcome === 'interrupted') state.reason = cycle.reason;
     await notify(session, publish, 'entry', 'negotiation');
     return;
   }
   candidate = {
-    author: facilitator, proposal: bounded(parsed.proposal as string, MAX_DRAFT),
+    author: draftedBy, proposal: bounded(parsed.proposal as string, MAX_DRAFT),
     assumptions: strings(parsed.assumptions, 12, 600),
     evidence: Array.isArray(parsed.evidence) ? parsed.evidence.slice(0, 12)
       .filter((x): x is Record<string, unknown> =>
@@ -864,7 +882,7 @@ async function executeNegotiationCycle(
       .map((x, i) => ({ id: 'E' + (i + 1), claim: bounded(x.claim as string, 900),
         source: typeof x.source === 'string' ? bounded(x.source, 300) : undefined,
         verification: 'unverified' as const })) : [],
-    rawResponse: bounded(raw, MAX_RAW), provenance: provenance(facilitator, prompt),
+    rawResponse: bounded(raw, MAX_RAW), provenance: provenance(draftedBy, prompt),
   };
   const knownIds = new Set(session.objections.map(o => o.id));
   cycle.decisions = Array.isArray(parsed.decisions) ? parsed.decisions.slice(0, 15)
@@ -921,7 +939,7 @@ async function executeNegotiationCycle(
         durationMs: Math.round(performance.now() - started),
         rawResponse: rawVote === undefined ? undefined : bounded(rawVote, MAX_RAW),
         provenance: provenance(provider, votePrompt), draftSha256: candidate.sha256,
-        authoredDraft: provider === facilitator,
+        authoredDraft: provider === candidate.author,
       };
     }
     const index = state.votes.findIndex(v => v.provider === provider);
