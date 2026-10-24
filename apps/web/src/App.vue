@@ -25,6 +25,8 @@ watch(maxRounds, (rounds) => {
   if (rounds === 2 && maxDurationMinutes.value < 20) maxDurationMinutes.value = 20;
 });
 const consensusEnabled = ref(true);
+const synthesisTimeoutSeconds = ref(600);
+const synthesisFallback = ref(true);
 const negotiationCycles = ref(1);
 const quorum = ref<'unanimous' | 'two_thirds'>('unanimous');
 const blockCritical = ref(true);
@@ -53,9 +55,11 @@ const validBudget = computed(() => unlimitedBudget.value ||
   (Number.isSafeInteger(maxCalls.value) && maxCalls.value >= 2 && maxCalls.value <= 10000 &&
    Number.isSafeInteger(maxDurationMinutes.value) && maxDurationMinutes.value >= 1 &&
    maxDurationMinutes.value <= 10080));
+const validSynthesis = computed(() => Number.isSafeInteger(synthesisTimeoutSeconds.value) &&
+  synthesisTimeoutSeconds.value >= 30 && synthesisTimeoutSeconds.value <= 1800);
 const valid = computed(() => prompt.value.trim().length >= 10 && prompt.value.length <= 12000 &&
   selected.value.length >= (mode.value === 'debate' ? 2 : 1) && authenticated.value &&
-  (mode.value !== 'debate' || validBudget.value));
+  (mode.value !== 'debate' || (validBudget.value && (!consensusEnabled.value || validSynthesis.value))));
 const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry) =>
   (visiblePhase.value === 'all' || entry.phase === visiblePhase.value) &&
   (visibleRound.value === -1 || entry.round === visibleRound.value)));
@@ -244,7 +248,9 @@ async function submit() {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, unlimitedBudget: unlimitedBudget.value,
       ...(!unlimitedBudget.value ? { maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000 } : {}),
-      consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value, negotiationCycles: negotiationCycles.value } : {}) }),
+      consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value,
+      synthesisTimeoutMs: synthesisTimeoutSeconds.value * 1000, synthesisFallback: synthesisFallback.value,
+      negotiationCycles: negotiationCycles.value } : {}) }),
     });
     const body: unknown = await response.json();
     if (!response.ok) {
@@ -282,7 +288,7 @@ onBeforeUnmount(closeStream);
 
 <template>
   <main class="shell">
-    <div class="eyebrow">MULTI-MODEL THINKING STUDIO · M4</div>
+    <div class="eyebrow">MULTI-MODEL THINKING STUDIO · M5.4</div>
     <header>
       <div><h1>AI Consensus <span>Engine</span></h1><p>One idea. Multiple intelligences. A better-informed decision.</p></div>
       <span class="phase">03 / CONSENSUS COUNCIL</span>
@@ -341,9 +347,11 @@ onBeforeUnmount(closeStream);
               <select v-model="quorum" :disabled="pending" aria-label="Voting policy"><option value="unanimous">Unanimous</option><option value="two_thirds">At least two-thirds</option></select>
             </label>
             <label class="consensus-toggle"><input v-model="blockCritical" type="checkbox" :disabled="pending" /> Block unresolved critical objections</label>
+            <label>Synthesis timeout (seconds) <input v-model.number="synthesisTimeoutSeconds" type="number" min="30" max="1800" step="30" :disabled="pending" aria-label="Synthesis provider timeout seconds" /></label>
+            <label class="consensus-toggle"><input v-model="synthesisFallback" type="checkbox" :disabled="pending" /> Try another selected provider if synthesis fails (each fallback uses a model call)</label>
             <label>Negotiation cycles <select v-model.number="negotiationCycles" :disabled="pending" aria-label="Maximum negotiation cycles"><option :value="0">Disabled</option><option :value="1">1 targeted cycle</option><option :value="2">2 targeted cycles</option></select></label>
           </div>
-          <p class="muted">Estimated workload: {{ estimatedCalls }} model calls, excluding up to {{ maximumFollowupCalls }} additional clarification and author-review calls. Individual provider invocations may take up to 4 minutes. {{ unlimitedBudget ? 'No session-wide call or time cap is applied.' : 'All stages share your custom call and duration caps.' }} Voting never implies facts have been verified.</p>
+          <p class="muted">Estimated workload: {{ estimatedCalls }} model calls, excluding up to {{ maximumFollowupCalls }} additional clarification and author-review calls. Synthesis invocations can run up to {{ synthesisTimeoutSeconds }} seconds each; other provider phases have separate bounded timeouts. {{ unlimitedBudget ? 'No session-wide call or time cap is applied.' : 'All stages share your custom call and duration caps.' }} Voting never implies facts have been verified.</p>
           <p v-if="!unlimitedBudget && estimatedCalls + maximumFollowupCalls > maxCalls" class="warning" role="status">The {{ maxCalls }}-call limit may prevent the council from finishing. Increase the limit or reduce debate rounds.</p>
         </div>
         <div class="row footer-row"><span class="muted">Local accounts · Traceable objections, independent votes, no forced agreement.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
