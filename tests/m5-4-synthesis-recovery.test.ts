@@ -208,3 +208,42 @@ test('fallback still respects unresolved critical objection gate and independent
   assert.equal(session.consensus?.unresolvedCriticalObjectionIds.length, 24);
   assert.equal(session.consensus?.objectionCoverage?.omittedCritical, 0);
 });
+
+
+test('M5 negotiated re-synthesis falls back safely and re-votes against the new author SHA', async () => {
+  const session = createDebateSession(req({ negotiationCycles: 1 }));
+  const preferred = chooseFacilitator(session);
+  await executeDebate(session, agents((id, text) => {
+    if (text.includes('Stage: M5 TARGETED NEGOTIATION REVISION')) return JSON.stringify({
+      proposal: 'A concrete revised proposal by ' + id,
+      tradeoffs: [], addressedObjectionIds: [],
+    });
+    if (text.includes('Stage: M5 NEGOTIATED SYNTHESIS')) {
+      if (id === preferred) throw new AgentExecutionError('Provider timed out.');
+      return JSON.stringify({ proposal: 'A fresh negotiated proposal with explicit verification milestones.',
+        assumptions: [], evidence: [], decisions: [] });
+    }
+    if (text.includes('Stage: INDEPENDENT CONSENSUS VOTE')) {
+      const revised = text.includes('A fresh negotiated proposal');
+      return JSON.stringify({
+        verdict: revised ? 'accept' : 'conditional',
+        rationale: revised ? 'All stages have validation gates.' : 'The original draft requires revision.',
+        concerns: revised ? [] : ['The previous draft needs negotiation.'],
+        resolvedObjectionIds: [], supersessions: [],
+      });
+    }
+    return success(id, text);
+  }), async () => {});
+  const calls = session.consensus?.negotiationCalls?.filter(c => c.role === 're_synthesis') ?? [];
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.provider, preferred);
+  assert.equal(calls[0]?.status, 'rejected');
+  assert.equal(calls[1]?.status, 'fulfilled');
+  assert.notEqual(session.consensus?.draft?.author, preferred);
+  assert.equal(session.consensus?.status, 'unanimous');
+  assert.equal(session.consensus?.negotiationHistory?.[0]?.outcome, 'completed');
+  assert.equal(session.consensus?.votes.length, 3);
+  assert.ok(session.consensus?.votes.every(v => v.draftSha256 === session.consensus?.draft?.sha256));
+  assert.equal(session.consensus?.votes.find(v => v.provider === session.consensus?.draft?.author)?.authoredDraft, true);
+  assert.equal(session.consensus?.votes.find(v => v.provider === preferred)?.authoredDraft, false);
+});
