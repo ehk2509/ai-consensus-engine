@@ -247,7 +247,7 @@ async function submit() {
     const isDebate = mode.value === 'debate';
     const response = await fetch(isDebate ? '/api/debates' : '/api/brainstorms', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, unlimitedBudget: unlimitedBudget.value,
+      body: JSON.stringify({ prompt: prompt.value, providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, unlimitedBudget: unlimitedBudget.value,
       ...(!unlimitedBudget.value ? { maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000 } : {}),
       consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value,
       synthesisTimeoutMs: synthesisTimeoutSeconds.value * 1000, synthesisFallback: synthesisFallback.value,
