@@ -143,7 +143,9 @@ export function validateDebateRequest(value: unknown): DebateRequest {
   if (quorum !== 'unanimous' && quorum !== 'two_thirds') throw new Error('quorum must be unanimous or two_thirds.');
   if (typeof blockCritical !== 'boolean') throw new Error('blockCritical must be a boolean.');
   if (negotiationCycles !== 0 && negotiationCycles !== 1 && negotiationCycles !== 2) throw new Error('negotiationCycles must be 0, 1, or 2.');
-  return { ...base, maxRounds, unlimitedBudget, maxCalls, maxDurationMs, consensus, quorum, blockCritical, negotiationCycles: negotiationCycles as 0 | 1 | 2 };
+  return { ...base, maxRounds, unlimitedBudget, maxCalls: maxCalls as number | undefined,
+    maxDurationMs: maxDurationMs as number | undefined,
+    consensus, quorum, blockCritical, negotiationCycles: negotiationCycles as 0 | 1 | 2 };
 }
 
 export function createDebateSession(request: DebateRequest): DebateSession {
