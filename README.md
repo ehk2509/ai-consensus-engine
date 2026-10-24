@@ -4,7 +4,7 @@
 
 Local-first, multi-provider brainstorming and structured AI deliberation powered by your installed **OpenAI Codex**, **Claude Code**, and **Gemini through Antigravity** CLI sessions.
 
-> **Current release: M5.4 — resilient synthesis and safe fallback (v0.5.4).** The council supports independent proposals, multi-round critique, a traceable synthesis, independent voting, bounded negotiation, and explicit checkpoint-safe recovery. Agreement is never fabricated when ballots fail or critical concerns remain. Unlimited applies to the *overall session*, not provider accounts or individual CLI timeouts.
+> **Current release: M5.5 — complete synthesis integrity and auditable objection coverage (v0.5.5).** The council supports independent proposals, multi-round critique, a traceable synthesis, independent voting, bounded negotiation, and explicit checkpoint-safe recovery. Agreement is never fabricated when ballots fail or critical concerns remain. Unlimited applies to the *overall session*, not provider accounts or individual CLI timeouts.
 
 ## Quick start
 
@@ -76,6 +76,12 @@ Every session keeps separate `debateStatus`, live execution `status` and `consen
 
 Evidence claims in a generated draft are recorded as **unverified**. The app does not independently browse, validate references or treat multiple-model agreement as factual truth. A final Markdown decision record is created for **every consensus attempt**, including missing votes, invalid drafts, cancellation, and insufficient budget. The report records unresolved critical concerns, gate policy, facilitator self-vote and dissent; downloadable from `GET /api/debates/:id/report` (409 if unavailable).
 
+## M5.5 complete synthesis integrity
+
+The system no longer freezes or sends a clipped model-authored synthesis to voters. A fully parseable JSON draft that exceeds 18,000 characters, or contains a truncation sentinel, is rejected and journaled; selected-provider fallback can attempt a new complete draft. M5 targeted revisions and negotiated re-syntheses have the same integrity check. To reduce avoidable failures, facilitator instructions request concise, complete decisions rather than a very long per-ID ledger. The downloaded decision report independently lists **all recorded objection IDs and statuses directly from persisted structured data**, separating the ledger from model-written synthesis prose. This confirms recorded-ID coverage, **not** that truncated original critique evidence is recoverable or that any objection is resolved.
+
+Historical frozen drafts and model ballots remain immutable. To benefit from these gates after a previously clipped report, start a **new** debate; a parser-integrity sentinel remains a blocker until separately investigated. See [Complete synthesis integrity](docs/COMPLETE_SYNTHESIS.md).
+
 ## M5.4 synthesis reliability and fallback
 
 For new council runs, `synthesisTimeoutMs` defaults to **600000** (10 minutes; valid range 30000–1800000 ms) and `synthesisFallback` defaults to **true**. Both options are available in the Vue consensus panel and `POST /api/debates`. A failed initial or M5 negotiated synthesis, provider timeout, or invalid structured draft can trigger a new attempt by the next **selected** provider. Attempts are recorded individually with UUID, provider, error and applied timeout; a previous failed/uncertain CLI call is **never silently reissued**. At most one initial synthesis attempt per selected model occurs without operator-authorized retries. Fallbacks consume extra calls and provider quota, and all results remain marked unverified.
@@ -117,7 +123,8 @@ Tech stack: Fastify, Vue 3/Vite, TypeScript, Node test runner, local CLI adapter
 - **M5–M5.1:** Targeted negotiation, frozen revised drafts, independent re-voting, draft-specific sign-offs and reliability hardening — merged
 - **M5.2:** Checkpoint-safe debate and consensus resume with explicit uncertain-call authorization — merged
 - **M5.3:** Unlimited session execution budget by default, with opt-in custom call/time caps — merged
-- **M5.4 (current):** Configurable synthesis timeouts, journaled provider fallback and exact failed-synthesis recovery — merged
+- **M5.4:** Configurable synthesis timeouts, journaled provider fallback and exact failed-synthesis recovery — merged
+- **M5.5 (current):** No silent truncated frozen drafts, fail-closed synthesis validation, deterministic objection register — merged
 
 Further work includes authenticated three-provider live smoke tests, hardened sandboxes, direct provider API integration, independent evidence verification and performance benchmarks. These remain separate features and are not claimed as implemented by M5.4.
 
