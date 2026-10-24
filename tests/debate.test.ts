@@ -91,7 +91,7 @@ test('isolates failed agents and marks insufficient participation correctly', as
   assert.ok(failAll.entries.every((entry) => entry.phase === 'proposal'));
 });
 
-test('peer material is delimited and trimmed before being reintroduced as context', async () => {
+test('peer material is untrusted and forwarded without shortening', async () => {
   let examined = 0;
   const session = createDebateSession({ ...ideas, providers: ['codex', 'claude'] });
   await executeDebate(session, adaptersWith((_id, prompt) => {
@@ -99,13 +99,13 @@ test('peer material is delimited and trimmed before being reintroduced as contex
       examined++;
       assert.ok(prompt.includes('<proposal_under_review>'));
       assert.ok(prompt.includes('UNTRUSTED'));
-      assert.ok(prompt.length < 40000);
+      assert.ok(prompt.includes('X'.repeat(29000)));
     }
     if (prompt.includes('Stage: INDEPENDENT')) return 'X'.repeat(29000);
     return 'Response';
   }), async () => {});
   assert.equal(examined, 2);
-  assert.ok(session.entries.every((e) => !e.content || e.content.length <= 25100));
+  assert.ok(session.entries.some((e) => e.phase === 'proposal' && e.content === 'X'.repeat(29000)));
 });
 
 test('records structured objections and maps rebuttal responses to exact objection IDs', async () => {
@@ -181,16 +181,16 @@ test('revision timeout increases for later rounds without crossing the session d
   assert.ok(revision.every(x => x.timeoutMs !== undefined && x.timeoutMs > 0 && x.timeoutMs <= 10000));
 });
 
-test('late-round revision prompts are explicitly bounded rather than endlessly copying full history', async () => {
+test('late-round revision prompts preserve complete prior proposals and peer objections', async () => {
   const session = createDebateSession({ ...ideas, providers: ['codex', 'claude', 'gemini'], maxRounds: 3 });
   const lengths: number[] = [];
   await executeDebate(session, adaptersWith((_id, prompt) => {
     if (prompt.includes('Stage: REVISE, round 3')) {
       lengths.push(prompt.length);
-      assert.match(prompt, /below 1,800 words/);
+      assert.match(prompt, /Produce a complete standalone UPDATED proposal/);
     }
     return 'long proposal '.repeat(1800);
   }), async () => {});
   assert.equal(lengths.length, 3);
-  assert.ok(lengths.every(length => length < 30000));
+  assert.ok(lengths.every(length => length > 30000));
 });
