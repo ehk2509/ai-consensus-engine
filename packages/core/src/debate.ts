@@ -274,8 +274,8 @@ function captureObjections(session: DebateSession, entry: DebateEntry, raw: stri
   // replace recovered individual objections with a giant generic JSON string.
   for (const error of decoded.errors) add({
     claim: decoded.unparseable ? 'Unparseable critique evidence' : 'Malformed critique evidence',
-    criticism: error + ' Full provider response is stored in source entry: ' + entry.id +
-      ' (' + raw.length + ' characters). Review that response; no unfinished objection was invented.',
+    criticism: error + ' Full provider response (unparsed and not validated as a critique):\n' + raw +
+      '\nSource entry: ' + entry.id + ' (' + raw.length + ' characters). No unfinished objection was invented.',
     severity: 'unspecified',
   }, 'parsing_failure');
 }
