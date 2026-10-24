@@ -8,7 +8,7 @@ Every **new multi-round debate** starts with **Unlimited calls and session durat
 
 Unlimited **does not mean free, unstoppable or unbounded per invocation**. The following protections still apply:
 
-- Each external Codex, Claude Code or Antigravity CLI call has its own phase-aware timeout; a hung call cannot run indefinitely.
+- Each external Codex, Claude Code or Antigravity CLI call has its own phase-aware timeout; a hung call cannot run indefinitely. Initial synthesis defaults to 600000 ms and is configurable per request from 30000 to 1800000 ms.
 - Connected CLI accounts remain subject to their actual provider plans, availability, quotas and any resulting costs.
 - Configured daily application quotas (if set), per-provider call metering, explicit manual Cancel and local worker isolation are unchanged.
 - A debate runs **1–3 rounds** and negotiated consensus runs **0–2 extra cycles**. Unlimited does not create an infinite negotiation loop.
@@ -90,7 +90,7 @@ For **N selected providers** and **R debate rounds**, the normal debate workload
 
 - Independent proposals: **N**.
 - Each round: **N × (N − 1)** peer critiques + **N** rebuttals + **N** revised proposals.
-- Initial synthesis and votes when `consensus: true`: **1 + N**.
+- Initial synthesis and votes when `consensus: true`: **1 + N** (successful first attempt). With M5.4 `synthesisFallback:true`, initial synthesis can add up to **N−1** calls when previous providers fail.
 - Each additional M5 negotiated cycle, if triggered: **2N + 1** provider calls.
 - Contradiction clarification and original-author objection sign-offs may add calls as needed.
 
@@ -129,8 +129,8 @@ These settings are optional and can stop new calls in **either** budget mode. A 
 | UI still shows a 40-call cap | Update the app to v0.5.3 or newer; confirm the specific session's saved `request.unlimitedBudget`. Old finite sessions do not automatically change. |
 | API says numeric budget conflicts with unlimited mode | Remove `maxCalls` and `maxDurationMs` or send `"unlimitedBudget": false`. |
 | Session says `budget_exhausted` despite selecting Unlimited | Check whether the session was created before the change or whether a provider/daily quota was reached. A true new unlimited run has no **session-wide** budget. |
-| One provider times out during Unlimited execution | Unlimited applies to the overall session, not the individual CLI subprocess. Inspect the provider step error and its timeout. |
-| A stopped session refuses resume (409) | Check exact uncertain/rejected call IDs, required acknowledgement, saved journal and whether it is a final decision. See [Recovery troubleshooting](RECOVERY.md). |
+| One provider times out during Unlimited execution | Unlimited applies to the overall session, not the individual CLI subprocess. Inspect its recorded timeout, increase `synthesisTimeoutMs` for **new** sessions (30–1800 seconds), and enable selected-provider synthesis fallback. |
+| A stopped session refuses resume (409) | Check exact uncertain/rejected call IDs, required acknowledgement, saved journal and whether it is a final decision. For a missing synthesis draft after all providers failed, only one explicit rejected-call retry is required. See [Recovery troubleshooting](RECOVERY.md) and [M5.4 synthesis reliability](SYNTHESIS_RELIABILITY.md). |
 
 ## Security and privacy
 
