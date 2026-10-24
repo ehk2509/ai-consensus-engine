@@ -817,7 +817,7 @@ async function executeNegotiationCycle(
         invalidateNegotiationResponse(state, cycleNumber, 'targeted_revision', author);
         throw new Error('Invalid, oversized or truncated targeted revision.');
       }
-      cycle.revisions.push({ provider: author, proposal: parsed.proposal.trim(),
+      cycle.revisions.push({ provider: author, proposal: parsed.proposal,
         tradeoffs: strings(parsed.tradeoffs, 12, 350), status: 'fulfilled' });
     } catch (error) {
       cycle.revisions.push({ provider: author, status: 'rejected', tradeoffs: [],
@@ -879,7 +879,7 @@ async function executeNegotiationCycle(
     return;
   }
   candidate = {
-    author: draftedBy, proposal: (parsed.proposal as string).trim(),
+    author: draftedBy, proposal: parsed.proposal as string,
     assumptions: strings(parsed.assumptions, 12, 600),
     evidence: Array.isArray(parsed.evidence) ? parsed.evidence
       .filter((x): x is Record<string, unknown> =>
@@ -1094,7 +1094,7 @@ export async function executeConsensus(
           continue;
         }
         state.draft = {
-          author: provider, proposal: parsed.proposal.trim(),
+          author: provider, proposal: parsed.proposal,
           assumptions: strings(parsed.assumptions, 12, 600),
           evidence: Array.isArray(parsed.evidence) ? parsed.evidence.filter((e): e is Record<string, unknown> =>
             Boolean(e && typeof e === 'object' && typeof e.claim === 'string' && e.claim.trim()))
