@@ -7,7 +7,7 @@ export interface CritiqueDecode {
   errors: string[];
   /** True when the complete returned JSON could not be parsed. */
   unparseable: boolean;
-  /** Exact classification of the original provider response, before UI shortening. */
+  /** Exact classification of the original provider response, before any UI formatting. */
   status: CritiqueParseStatus;
 }
 function object(value: unknown): value is Item {
