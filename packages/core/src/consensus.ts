@@ -280,7 +280,18 @@ ${session.objections.flatMap(o => (o.authorSignoffs ?? []).map(approval =>
 
 This register is generated from the session's structured records, **not** from facilitator prose. Its IDs and statuses do not prove that objections are resolved or that the original provider JSON was complete. The register contains **${session.objections.length}** IDs; any unparseable evidence record remains unverified.
 
-${session.objections.length ? session.objections.map(o => '- ' + o.id + ' (round ' + o.round + '; ' + o.author + ' → ' + o.target + '; ' + o.severity + '; ' + (o.kind ?? 'substantive') + '; ' + (o.authorStatus ?? 'open') + '): ' + o.claim).join('\n') : 'No structured objections were recorded.'}
+${session.objections.length ? session.objections.map(o =>
+  '### ' + o.id + '\n' +
+  '- Round: ' + o.round + '; author: ' + o.author + '; target: ' + o.target +
+  '; severity: ' + o.severity + '; kind: ' + (o.kind ?? 'substantive') +
+  '; status: ' + (o.authorStatus ?? 'open') + '\n' +
+  '- Claim: ' + o.claim + '\n' +
+  '- Criticism: ' + o.criticism + '\n' +
+  '- Evidence: ' + JSON.stringify(o.evidence) + '\n' +
+  '- Suggested change: ' + (o.suggestedChange ?? 'none') + '\n' +
+  '- Response: ' + (o.response ?? 'none') + '\n' +
+  '- Source entry: ' + (o.sourceEntryId ?? 'not recorded') + '\n'
+).join('\n') : 'No structured objections were recorded.'}
 
 ## Objection grouping (advisory)
 
