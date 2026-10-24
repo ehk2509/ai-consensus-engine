@@ -55,24 +55,26 @@ test('synthesis and every independent ballot see identical complete objection co
   assert.equal(session.consensus?.status, 'disputed');
 });
 
-test('excess critical objections fail closed before expensive draft and vote calls', async () => {
+test('large critical objection ledger is passed in full to synthesis and all ballots', async () => {
   const session = createDebateSession(request({ maxRounds: 1 }));
   let consensusCalls = 0;
   await executeDebate(session, adapters((_id, prompt) => {
     if (prompt.includes('Stage: CRITIQUE')) return objections(32, 32);
     if (prompt.includes('Stage: REBUTTAL')) return JSON.stringify({ responses: [] });
-    if (prompt.includes('Stage: CONSENSUS DRAFT') || prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')) {
+    if (prompt.includes('Stage: CONSENSUS DRAFT')) { consensusCalls++; return draft; }
+    if (prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')) {
       consensusCalls++;
-      return draft;
+      return JSON.stringify({ verdict: 'accept', rationale: 'Still requires critical author signoff.',
+        concerns: [], resolvedObjectionIds: [], supersessions: [] });
     }
     return 'Candidate proposal';
   }), async () => {});
   assert.equal(session.objections.length, 192);
-  assert.ok((session.consensus?.contextOmittedCriticalIds?.length ?? 0) > 0);
-  assert.equal(session.consensus?.status, 'incomplete');
-  assert.equal(session.consensus?.votes.length, 0);
-  assert.equal(consensusCalls, 0);
-  assert.match(session.consensus?.reportMarkdown ?? '', /exceeded the shared context budget/i);
+  assert.equal(session.consensus?.contextOmittedCriticalIds?.length, 0);
+  assert.equal(session.consensus?.objectionCoverage?.included, 192);
+  assert.equal(session.consensus?.votes.length, 3);
+  assert.equal(consensusCalls, 4);
+  assert.equal(session.consensus?.status, 'blocked');
 });
 test('the original author can sign off fixed objections without falsely accepting the whole draft', async () => {
   const session = createDebateSession(request({ maxRounds: 1 }));
@@ -92,7 +94,7 @@ test('the original author can sign off fixed objections without falsely acceptin
   assert.equal(session.objections.filter(o => o.authorStatus === 'confirmed_resolved').length, 3);
   assert.equal(session.consensus?.unresolvedCriticalObjectionIds.length, 3);
 });
-test('compact packing never loses an open parsing-failure sentinel or invents author signoff', () => {
+test('lossless packing retains every parser-failure record despite old size hint', () => {
   const objs = Array.from({ length: 48 }, (_, i) => ({
     id: String(i).padStart(36, '0'), round: 2, author: providers[i % 3]!, target: providers[(i + 1) % 3]!,
     severity: i < 30 ? 'high' as const : 'medium' as const,
@@ -106,5 +108,7 @@ test('compact packing never loses an open parsing-failure sentinel or invents au
   assert.equal(new Set([...compact.includedIds, ...compact.omittedIds]).size, 48);
   assert.ok(included.some(o => o.id === objs[0]!.id));
   assert.equal(compact.omittedCriticalIds.includes(objs[0]!.id), false);
-  assert.ok(compact.text.length <= 24000);
+  assert.ok(compact.text.length > 24000);
+  assert.equal(included.length, 48);
+  assert.equal(compact.omittedIds.length, 0);
 });
