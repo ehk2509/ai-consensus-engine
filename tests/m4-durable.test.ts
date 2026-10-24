@@ -36,7 +36,7 @@ test('durable queue auto-recovers never-issued queued jobs after worker process 
   try {
     const health = await app.inject({ method: 'GET', url: '/api/health' });
     assert.equal(health.statusCode, 200);
-    assert.equal((health.json() as { version: string }).version, '0.5.3');
+    assert.equal((health.json() as { version: string }).version, '0.5.4');
     const finished = await settled(app, session.id);
     assert.equal(finished.status, 'completed');
     assert.equal(finished.entries.filter(e => e.status === 'fulfilled').length, 8);

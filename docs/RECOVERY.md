@@ -1,6 +1,6 @@
 # Safe resume and recovery
 
-Applies to **M5.2+**, including the **v0.5.3 unlimited-budget policy**. Read [Execution budget](EXECUTION_BUDGET.md) for configuring budgets.
+Applies to **M5.2+**, including the **v0.5.3 unlimited-budget policy** and **M5.4 initial-synthesis fallback and recovery**. Read [Execution budget](EXECUTION_BUDGET.md) for configuring budgets.
 
 ## What recovery does
 
@@ -8,8 +8,10 @@ The local worker persists a write-ahead record **before** an external CLI call. 
 
 - Reuse successful independent proposals, critiques, rebuttals and revisions.
 - Restore a persisted synthesis and its frozen SHA-256.
+- For a missing initial draft, safely use the next untouched selected synthesis provider or require just one explicitly authorized failed-synthesis retry when all providers have failed. Never erase the failed facilitator's journal.
 - Reuse completed independent votes **only when their draft SHA-256 matches** the frozen synthesis.
 - Restore completed targeted negotiations and re-votes without replaying already-fulfilled provider work.
+- Retry a failed negotiated re-synthesis from a complete journal with only one authorized rejected synthesis UUID while keeping earlier targeted revisions and original ballots.
 - Reconstruct complete journaled responses when the provider result was saved but the parsed stage artifact had not yet been committed.
 
 **No AI call is silently replayed** when its execution status is uncertain. Its provider may already have processed or billed it.
@@ -72,6 +74,7 @@ A fully saved synthesis/ballot set can be reconstructed with **zero additional p
 ## Cases intentionally rejected
 
 - An **issued/uncertain provider call** without its exact ID and explicit user acknowledgement.
+- All selected initial or negotiated synthesis providers already failed and no rejected synthesis UUID has been authorized for retry. One such authorization per unfinished synthesis stage suffices (not all), but every earlier attempt remains in the audit.
 - A failed critique or earlier step when successfully recorded later stages depend on it and would become inconsistent after replay.
 - Legacy consensus runs without enough write-ahead information to distinguish saved results from possibly billed calls.
 - A finite session with an expired deadline, or a requested retry beyond its remaining call cap.
@@ -90,7 +93,7 @@ Provider outputs above the journal replay threshold may not be reconstructable f
 6. Authorize its **exact ID**, retry it, then check that total call usage increments only for the new attempt and its frozen draft hash is unchanged.
 7. Repeat with an unlimited session; verify there is **no synthetic overall deadline**. Repeat with a small finite cap; verify the original cap and deadline still bind.
 
-CI verifies these behaviors using deterministic adapters and crash fixtures. **A real authenticated multi-provider interruption/restart is a separate integration check** and may incur actual provider usage.
+CI verifies these behaviors using deterministic adapters and crash fixtures; M5.4 tests exercise failover, single-UUID retry, and the real-world no-draft timeout case. See [Synthesis reliability](SYNTHESIS_RELIABILITY.md). **A real authenticated multi-provider interruption/restart is a separate integration check** and may incur actual provider usage.
 
 ## Operational safeguards
 

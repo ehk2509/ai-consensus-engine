@@ -4,7 +4,7 @@
 
 Local-first, multi-provider brainstorming and structured AI deliberation powered by your installed **OpenAI Codex**, **Claude Code**, and **Gemini through Antigravity** CLI sessions.
 
-> **Current release: M5.3 — unlimited execution budget by default (v0.5.3).** The council supports independent proposals, multi-round critique, a traceable synthesis, independent voting, bounded negotiation, and explicit checkpoint-safe recovery. Agreement is never fabricated when ballots fail or critical concerns remain. Unlimited applies to the *overall session*, not provider accounts or individual CLI timeouts.
+> **Current release: M5.4 — resilient synthesis and safe fallback (v0.5.4).** The council supports independent proposals, multi-round critique, a traceable synthesis, independent voting, bounded negotiation, and explicit checkpoint-safe recovery. Agreement is never fabricated when ballots fail or critical concerns remain. Unlimited applies to the *overall session*, not provider accounts or individual CLI timeouts.
 
 ## Quick start
 
@@ -16,7 +16,7 @@ npm run dev
 # Open http://127.0.0.1:5173
 ```
 
-Select **Multi-round debate**, pick two or three agents, enter an idea and choose 1–3 rounds (default 1). **Execution budget is Unlimited by default**; uncheck *Unlimited calls and session duration* to enter your own Max calls and Minutes. The UI enables independent consensus voting and one negotiation cycle by default. For a quick side-by-side response without further agent calls, switch to **Independent proposals**. Remote Vite development is deliberately disabled: proxying the unauthenticated API through a public Vite listener would expose privileged operations.
+Select **Multi-round debate**, pick two or three agents, enter an idea and choose 1–3 rounds (default 1). **Execution budget is Unlimited by default**; uncheck *Unlimited calls and session duration* to enter your own Max calls and Minutes. The UI enables independent consensus voting and one negotiation cycle by default. **M5.4 adds a 10-minute synthesis CLI timeout by default** (configurable 30 seconds to 30 minutes) and an opt-out, journaled fallback to another selected provider if synthesis fails. Unlimited removes overall caps, not individual CLI timeouts. For a quick side-by-side response without further agent calls, switch to **Independent proposals**. Remote Vite development is deliberately disabled: proxying the unauthenticated API through a public Vite listener would expose privileged operations.
 
 ## Documentation
 
@@ -76,6 +76,12 @@ Every session keeps separate `debateStatus`, live execution `status` and `consen
 
 Evidence claims in a generated draft are recorded as **unverified**. The app does not independently browse, validate references or treat multiple-model agreement as factual truth. A final Markdown decision record is created for **every consensus attempt**, including missing votes, invalid drafts, cancellation, and insufficient budget. The report records unresolved critical concerns, gate policy, facilitator self-vote and dissent; downloadable from `GET /api/debates/:id/report` (409 if unavailable).
 
+## M5.4 synthesis reliability and fallback
+
+For new council runs, `synthesisTimeoutMs` defaults to **600000** (10 minutes; valid range 30000–1800000 ms) and `synthesisFallback` defaults to **true**. Both options are available in the Vue consensus panel and `POST /api/debates`. A failed initial or M5 negotiated synthesis, provider timeout, or invalid structured draft can trigger a new attempt by the next **selected** provider. Attempts are recorded individually with UUID, provider, error and applied timeout; a previous failed/uncertain CLI call is **never silently reissued**. At most one initial synthesis attempt per selected model occurs without operator-authorized retries. Fallbacks consume extra calls and provider quota, and all results remain marked unverified.
+
+If no valid initial draft is produced, the report remains **incomplete** and records the original objections and failed calls. A failed M5 negotiated synthesis retains the earlier draft and ballots as history without falsely using them to ratify the revised proposal. To resume an already failed run, open it in History → **Resume from verified checkpoint**, select one rejected synthesis call if all providers have been tried, and acknowledge possible duplicate billing. An unfinished M5 negotiated cycle can likewise resume with one authorized rejected re-synthesis UUID; successfully completed revisions are not repeated. If an untouched fallback provider exists, resume can attempt it without repeating any earlier failed CLI call. The original finite deadline/call limit still applies, even after upgrading to M5.4. See [Synthesis reliability](docs/SYNTHESIS_RELIABILITY.md) for the exact recovery cases and safe live smoke checklist.
+
 ## Data and restart behavior
 
 Snapshots are atomically persisted after each stage and each agent response, by default under `.ace-data/debates/<uuid>.json`, which is gitignored. Override storage with `ACE_DATA_DIR=/private/path`. Session files contain the original idea, proposals, structured objections, critiques, rebuttals and revisions **in plain text**; protect this folder if your ideas are confidential.
@@ -110,9 +116,10 @@ Tech stack: Fastify, Vue 3/Vite, TypeScript, Node test runner, local CLI adapter
 - **M4–M4.2:** Durable local execution, authenticated queue, parser resilience, objection integrity and verified coverage — merged
 - **M5–M5.1:** Targeted negotiation, frozen revised drafts, independent re-voting, draft-specific sign-offs and reliability hardening — merged
 - **M5.2:** Checkpoint-safe debate and consensus resume with explicit uncertain-call authorization — merged
-- **M5.3 (current):** Unlimited session execution budget by default, with opt-in custom call/time caps — merged
+- **M5.3:** Unlimited session execution budget by default, with opt-in custom call/time caps — merged
+- **M5.4 (current):** Configurable synthesis timeouts, journaled provider fallback and exact failed-synthesis recovery — merged
 
-Further work includes authenticated three-provider live smoke tests, hardened sandboxes, direct provider API integration, independent evidence verification and performance benchmarks.
+Further work includes authenticated three-provider live smoke tests, hardened sandboxes, direct provider API integration, independent evidence verification and performance benchmarks. These remain separate features and are not claimed as implemented by M5.4.
 
 The goal is a **traceable, defensible decision**, not artificial agreement.
 
