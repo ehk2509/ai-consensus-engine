@@ -155,7 +155,7 @@ test('stops debates when cancelled without falsely claiming completion', async (
 });
 
 test('rejects invalid total call and time budgets', () => {
-  for (const values of [{ maxCalls: 41 }, { maxCalls: 1 }, { maxDurationMs: 9000 }, { maxDurationMs: 1900000 }]) {
+  for (const values of [{ maxCalls: 10001 }, { maxCalls: 1 }, { maxDurationMs: 9000 }, { maxDurationMs: 604800001 }]) {
     assert.throws(() => validateDebateRequest({ ...ideas, ...values }));
   }
 });

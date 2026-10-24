@@ -1,5 +1,5 @@
 import { DebateStore } from './debate-store.ts';
-import { executeDebate, uncertainDebateEntries } from '../../../packages/core/src/debate.ts';
+import { executeDebate, uncertainDebateEntries, executionCallLimit, executionDurationLimitMs } from '../../../packages/core/src/debate.ts';
 import type { DebateSession } from '../../../packages/core/src/debate.ts';
 import type { AgentAdapter } from '../../../packages/core/src/types.ts';
 
@@ -117,17 +117,21 @@ export class DurableDebateWorker {
         !['running', 'interrupted', 'queued'].includes(session.status) && !reviewInterrupted) {
       return conflict('The recorded consensus decision is final. Create a new debate to re-evaluate it.');
     }
-    // Pre-M4.2 stored work might lack a persisted deadline. Derive one
-    // conservatively from creation time; do not grant a fresh full budget.
-    if (!session.executionDeadlineAt) {
-      const created = Date.parse(session.createdAt);
-      if (Number.isFinite(created)) {
-        session.executionDeadlineAt = new Date(created + (session.request.maxDurationMs ?? 900000)).toISOString();
+    // Unlimited sessions have no session-wide expiry, but retain exact call
+    // identities and never silently retry charged provider work. Legacy finite
+    // sessions keep their original deadline, including downtime.
+    const durationBudget = executionDurationLimitMs(session.request);
+    if (durationBudget !== undefined) {
+      if (!session.executionDeadlineAt) {
+        const created = Date.parse(session.createdAt);
+        if (Number.isFinite(created)) {
+          session.executionDeadlineAt = new Date(created + durationBudget).toISOString();
+        }
       }
-    }
-    const deadline = Date.parse(session.executionDeadlineAt ?? '');
-    if (!Number.isFinite(deadline) || deadline <= Date.now()) {
-      return conflict('The original session deadline has expired; resuming cannot extend it. Start a new run.');
+      const deadline = Date.parse(session.executionDeadlineAt ?? '');
+      if (!Number.isFinite(deadline) || deadline <= Date.now()) {
+        return conflict('The original session deadline has expired; resuming cannot extend it. Start a new run.');
+      }
     }
     // Exhausted budgets may still reconstruct fully persisted outputs at zero cost.
     // Explicit retries are checked against the remaining budget below.
@@ -189,7 +193,7 @@ export class DurableDebateWorker {
       return conflict('Partial debate recovery requires explicit retry of at least one failed or skipped stage.',
         failedDebate.map(e => e.id));
     }
-    if (session.calls + requested.size > (session.request.maxCalls ?? 40)) {
+    if (session.calls + requested.size > executionCallLimit(session.request)) {
       return conflict('Not enough model-call budget to cover requested repeats.');
     }
     // Replaying a critique after the rebuttal/revision already ran would require

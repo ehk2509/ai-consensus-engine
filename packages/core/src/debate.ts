@@ -11,6 +11,8 @@ export type DebateStatus = 'queued' | 'running' | 'completed' | 'partial' | 'ins
 
 export interface DebateRequest extends BrainstormRequest {
   maxRounds: number;
+  /** Default unlimited; existing requests with explicit limits remain capped. */
+  unlimitedBudget?: boolean;
   maxCalls?: number;
   maxDurationMs?: number;
   consensus?: boolean;
@@ -95,6 +97,19 @@ export interface DebateSession {
   error?: string;
 }
 
+/** Unlimited removes only the SESSION-wide budget, not per-provider timeouts,
+ * cancellation, fixed debate rounds or the provider's own quota.
+ * Old persisted requests that explicitly had limits remain finite.
+ */
+export function isUnlimitedExecutionBudget(request: DebateRequest): boolean {
+  return request.unlimitedBudget ?? (request.maxCalls === undefined && request.maxDurationMs === undefined);
+}
+export function executionCallLimit(request: DebateRequest): number {
+  return isUnlimitedExecutionBudget(request) ? Infinity : (request.maxCalls ?? 40);
+}
+export function executionDurationLimitMs(request: DebateRequest): number | undefined {
+  return isUnlimitedExecutionBudget(request) ? undefined : (request.maxDurationMs ?? 900000);
+}
 export function validateDebateRequest(value: unknown): DebateRequest {
   const base = validateRequest(value);
   if (base.providers.length < 2) throw new Error('Select at least two providers for a debate.');
@@ -103,10 +118,23 @@ export function validateDebateRequest(value: unknown): DebateRequest {
   if (typeof maxRounds !== 'number' || !Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 3) {
     throw new Error('maxRounds must be an integer between 1 and 3.');
   }
-  const maxCalls = obj.maxCalls === undefined ? 40 : obj.maxCalls;
-  const maxDurationMs = obj.maxDurationMs === undefined ? 900000 : obj.maxDurationMs;
-  if (typeof maxCalls !== 'number' || !Number.isInteger(maxCalls) || maxCalls < 2 || maxCalls > 40) throw new Error('maxCalls must be an integer between 2 and 40.');
-  if (typeof maxDurationMs !== 'number' || !Number.isInteger(maxDurationMs) || maxDurationMs < 10000 || maxDurationMs > 1800000) throw new Error('maxDurationMs must be an integer between 10000 and 1800000.');
+  if (obj.unlimitedBudget !== undefined && typeof obj.unlimitedBudget !== 'boolean')
+    throw new Error('unlimitedBudget must be a boolean.');
+  const unlimitedBudget = obj.unlimitedBudget === undefined
+    ? obj.maxCalls === undefined && obj.maxDurationMs === undefined
+    : obj.unlimitedBudget;
+  if (unlimitedBudget && (obj.maxCalls !== undefined || obj.maxDurationMs !== undefined)) {
+    throw new Error('Remove maxCalls and maxDurationMs when unlimitedBudget is true.');
+  }
+  const maxCalls = unlimitedBudget ? undefined : (obj.maxCalls ?? 40);
+  const maxDurationMs = unlimitedBudget ? undefined : (obj.maxDurationMs ?? 900000);
+  if (!unlimitedBudget &&
+      (typeof maxCalls !== 'number' || !Number.isSafeInteger(maxCalls) || maxCalls < 2 || maxCalls > 10000))
+    throw new Error('maxCalls must be an integer between 2 and 10000.');
+  if (!unlimitedBudget &&
+      (typeof maxDurationMs !== 'number' || !Number.isSafeInteger(maxDurationMs) ||
+        maxDurationMs < 10000 || maxDurationMs > 604800000))
+    throw new Error('maxDurationMs must be an integer between 10000 and 604800000 (7 days).');
   const consensus = obj.consensus === undefined ? false : obj.consensus;
   const quorum = obj.quorum === undefined ? 'unanimous' : obj.quorum;
   const blockCritical = obj.blockCritical === undefined ? true : obj.blockCritical;
@@ -115,12 +143,17 @@ export function validateDebateRequest(value: unknown): DebateRequest {
   if (quorum !== 'unanimous' && quorum !== 'two_thirds') throw new Error('quorum must be unanimous or two_thirds.');
   if (typeof blockCritical !== 'boolean') throw new Error('blockCritical must be a boolean.');
   if (negotiationCycles !== 0 && negotiationCycles !== 1 && negotiationCycles !== 2) throw new Error('negotiationCycles must be 0, 1, or 2.');
-  return { ...base, maxRounds, maxCalls, maxDurationMs, consensus, quorum, blockCritical, negotiationCycles: negotiationCycles as 0 | 1 | 2 };
+  return { ...base, maxRounds, unlimitedBudget, maxCalls, maxDurationMs, consensus, quorum, blockCritical, negotiationCycles: negotiationCycles as 0 | 1 | 2 };
 }
 
 export function createDebateSession(request: DebateRequest): DebateSession {
   const now = new Date().toISOString();
-  return { id: randomUUID(), request: { ...request, maxCalls: request.maxCalls ?? 40, maxDurationMs: request.maxDurationMs ?? 900000 }, createdAt: now, updatedAt: now, status: 'queued', phase: null, round: 0, entries: [], objections: [], calls: 0, events: [] };
+  const unlimitedBudget = isUnlimitedExecutionBudget(request);
+  const normalized: DebateRequest = unlimitedBudget
+    ? { ...request, unlimitedBudget: true, maxCalls: undefined, maxDurationMs: undefined }
+    : { ...request, unlimitedBudget: false, maxCalls: request.maxCalls ?? 40, maxDurationMs: request.maxDurationMs ?? 900000 };
+  return { id: randomUUID(), request: normalized, createdAt: now, updatedAt: now,
+    status: 'queued', phase: null, round: 0, entries: [], objections: [], calls: 0, events: [] };
 }
 
 export type DebatePublisher = (session: DebateSession) => Promise<void>;
@@ -282,7 +315,7 @@ async function perform(
     id: randomUUID(), stepKey: key, phase, round, provider, target,
     status: 'issued', durationMs: 0, timeoutMs, createdAt: new Date().toISOString(),
   };
-  if (signal?.aborted || remainingMs <= 0 || session.calls >= (session.request.maxCalls ?? 40)) {
+  if (signal?.aborted || remainingMs <= 0 || session.calls >= executionCallLimit(session.request)) {
     entry.status = 'skipped';
     entry.error = signal?.aborted || remainingMs <= 0
       ? 'Execution cancelled or time limit reached.' : 'Session call budget exhausted.';
@@ -342,11 +375,12 @@ export async function executeDebate(
   // A session gets ONE wall-clock deadline on its first execution. Downtime and
   // human approval time count toward that deadline (conservative no-extension policy).
   const firstStart = Date.now();
-  if (!session.executionDeadlineAt) {
-    session.executionDeadlineAt = new Date(firstStart + (session.request.maxDurationMs ?? 900000)).toISOString();
+  const durationBudget = executionDurationLimitMs(session.request);
+  if (durationBudget !== undefined && !session.executionDeadlineAt) {
+    session.executionDeadlineAt = new Date(firstStart + durationBudget).toISOString();
   }
-  const deadlineMs = Date.parse(session.executionDeadlineAt);
-  if (!Number.isFinite(deadlineMs) || deadlineMs <= firstStart) {
+  const deadlineMs = durationBudget === undefined ? undefined : Date.parse(session.executionDeadlineAt ?? '');
+  if (durationBudget !== undefined && (deadlineMs === undefined || !Number.isFinite(deadlineMs) || deadlineMs <= firstStart)) {
     session.status = 'budget_exhausted';
     session.error = 'The original wall-clock deadline expired; resuming cannot extend the time budget.';
     session.phase = null;
@@ -359,7 +393,8 @@ export async function executeDebate(
   const onCancel = () => controller.abort();
   if (externalSignal?.aborted) controller.abort();
   externalSignal?.addEventListener('abort', onCancel, { once: true });
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(1, deadlineMs - Date.now()));
+  const timer = deadlineMs === undefined ? undefined :
+    setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(1, deadlineMs - Date.now()));
   const signal = controller.signal;
   session.status = 'running';
   const consensusRecovery = session.recovery?.kind === 'consensus';
@@ -424,7 +459,7 @@ export async function executeDebate(
       session.status = session.debateStatus ?? 'partial';
     }
   }
-  clearTimeout(timer);
+  if (timer !== undefined) clearTimeout(timer);
   externalSignal?.removeEventListener('abort', onCancel);
   if (signal.aborted) session.status = timedOut ? 'budget_exhausted' : 'cancelled';
   session.phase = null;
