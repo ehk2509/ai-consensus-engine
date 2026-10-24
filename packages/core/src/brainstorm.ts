@@ -5,7 +5,7 @@ import { PROVIDER_IDS } from './types.ts';
 export function validateRequest(input: unknown): BrainstormRequest {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('A JSON object is required.');
   const value = input as Record<string, unknown>;
-  if (typeof value.prompt !== 'string' || value.prompt.trim().length < 10 || value.prompt.length > 12000) {
+  if (typeof value.prompt !== 'string' || value.prompt.trim().length < 10 || value.prompt.length > 1000000) {
     throw new Error('Prompt must contain 10–12,000 characters.');
   }
   if (!Array.isArray(value.providers) || value.providers.length === 0 || value.providers.length > PROVIDER_IDS.length ||
