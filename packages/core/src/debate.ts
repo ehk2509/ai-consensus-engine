@@ -18,6 +18,10 @@ export interface DebateRequest extends BrainstormRequest {
   consensus?: boolean;
   quorum?: 'unanimous' | 'two_thirds';
   blockCritical?: boolean;
+  /** Bounded per-CLI synthesis timeout, independent from the overall execution budget. */
+  synthesisTimeoutMs?: number;
+  /** A failed or invalid synthesis may be attempted by another selected provider. */
+  synthesisFallback?: boolean;
   /** Optional extra bounded negotiation cycles after the first independent vote. */
   negotiationCycles?: 0 | 1 | 2;
 }
@@ -135,6 +139,13 @@ export function validateDebateRequest(value: unknown): DebateRequest {
       (typeof maxDurationMs !== 'number' || !Number.isSafeInteger(maxDurationMs) ||
         maxDurationMs < 10000 || maxDurationMs > 604800000))
     throw new Error('maxDurationMs must be an integer between 10000 and 604800000 (7 days).');
+  const synthesisTimeoutMs = obj.synthesisTimeoutMs === undefined ? 600000 : obj.synthesisTimeoutMs;
+  if (typeof synthesisTimeoutMs !== 'number' || !Number.isSafeInteger(synthesisTimeoutMs) ||
+      synthesisTimeoutMs < 30000 || synthesisTimeoutMs > 1800000) {
+    throw new Error('synthesisTimeoutMs must be an integer between 30000 and 1800000 (30 seconds to 30 minutes).');
+  }
+  const synthesisFallback = obj.synthesisFallback === undefined ? true : obj.synthesisFallback;
+  if (typeof synthesisFallback !== 'boolean') throw new Error('synthesisFallback must be a boolean.');
   const consensus = obj.consensus === undefined ? false : obj.consensus;
   const quorum = obj.quorum === undefined ? 'unanimous' : obj.quorum;
   const blockCritical = obj.blockCritical === undefined ? true : obj.blockCritical;
@@ -145,7 +156,8 @@ export function validateDebateRequest(value: unknown): DebateRequest {
   if (negotiationCycles !== 0 && negotiationCycles !== 1 && negotiationCycles !== 2) throw new Error('negotiationCycles must be 0, 1, or 2.');
   return { ...base, maxRounds, unlimitedBudget, maxCalls: maxCalls as number | undefined,
     maxDurationMs: maxDurationMs as number | undefined,
-    consensus, quorum, blockCritical, negotiationCycles: negotiationCycles as 0 | 1 | 2 };
+    consensus, quorum, blockCritical, synthesisTimeoutMs, synthesisFallback,
+    negotiationCycles: negotiationCycles as 0 | 1 | 2 };
 }
 
 export function createDebateSession(request: DebateRequest): DebateSession {
@@ -168,9 +180,9 @@ export function uncertainDebateEntries(session: DebateSession): DebateEntry[] {
 const MAX_STORED_CHARS = 25000;
 const MAX_OBJECTIONS_PER_REVIEW = 32;
 
-export function recommendedTurnTimeoutMs(phase: DebatePhase, round: number): number {
+export function recommendedTurnTimeoutMs(phase: DebatePhase, round: number, synthesisTimeoutMs = 600000): number {
   if (phase === 'revision') return Math.min(240000, 180000 + Math.max(0, round - 1) * 30000);
-  if (phase === 'synthesis') return 210000;
+  if (phase === 'synthesis') return synthesisTimeoutMs;
   if (phase === 'vote') return 180000;
   if (phase === 'proposal') return 150000;
   return 150000;
