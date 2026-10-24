@@ -27,7 +27,7 @@ async function run(fn: (id: ProviderId, prompt: string) => string, overrides: Re
   return session;
 }
 
-test('large valid structured critique is parsed before 25k UI truncation, preserving every objection', async () => {
+test('large structured critique and all stored evidence remain complete', async () => {
   let firstLength = 0;
   const debate = await run((id, prompt) => {
     if (prompt.includes('Stage: CRITIQUE')) {
@@ -45,7 +45,8 @@ test('large valid structured critique is parsed before 25k UI truncation, preser
   assert.equal(debate.objections.length, 48);
   assert.equal(new Set(debate.objections.map(x => x.id)).size, 48);
   assert.ok(debate.objections.every(x => x.kind === 'substantive' && x.sourceEntryId));
-  assert.ok(debate.entries.filter(x => x.phase === 'critique').every(x => (x.content?.length ?? 0) < 26000));
+  assert.ok(debate.entries.filter(x => x.phase === 'critique').every(x => (x.content?.length ?? 0) === firstLength));
+  assert.ok(debate.objections.every(x => x.claim.length > 2500 && x.criticism.length > 1800));
 });
 
 test('partial malformed JSON salvages complete objects plus a separate parsing failure', () => {
@@ -59,7 +60,7 @@ test('partial malformed JSON salvages complete objects plus a separate parsing f
   assert.deepEqual(decodeCritique('{"objections":[]}').errors, []);
 });
 
-test('context packing is parseable and prioritizes unresolved high severity without dropping IDs silently', () => {
+test('full objection packing retains every record and character regardless of old size hint', () => {
   const all = Array.from({ length: 30 }, (_, i) => ({
     id: String(i).padStart(36, 'a'), author: ids[i % 3]!, target: ids[(i + 1) % 3]!,
     round: i % 2 + 1, claim: 'C'.repeat(600), criticism: 'X'.repeat(850),
@@ -68,10 +69,11 @@ test('context packing is parseable and prioritizes unresolved high severity with
   }));
   const packed = packObjections(all, 1600);
   const parsed = JSON.parse(packed.text) as Array<{ id: string; severity: string }>;
-  assert.ok(parsed.length > 0 && parsed.length < all.length);
-  assert.ok(parsed.every(x => x.severity === 'high'));
+  assert.equal(parsed.length, all.length);
+  assert.ok(packed.text.includes('X'.repeat(850)));
   assert.equal(new Set([...packed.includedIds, ...packed.omittedIds]).size, all.length);
-  assert.ok(packed.omittedCriticalIds.length > 0);
+  assert.equal(packed.omittedCriticalIds.length, 0);
+  assert.equal(packed.omittedIds.length, 0);
 });
 
 test('final author resolution clears substantive objections after accepted ballots', async () => {
@@ -140,7 +142,7 @@ test('resolution cannot exceed call budget; missing signoff stays blocked', asyn
   assert.equal(session.consensus?.resolutionAttempts?.length, 0);
 });
 
-test('if important critical context does not fit, unanimous ballots cannot claim verified consensus', async () => {
+test('large critical evidence is not omitted and unresolved objections still block acceptance', async () => {
   const session = await run((id, prompt) => prompt.includes('Stage: CRITIQUE')
     ? JSON.stringify({ objections: Array.from({ length: 32 }, (_, i) => ({
       claim: 'Unresolved critical risk ' + i,
@@ -148,7 +150,8 @@ test('if important critical context does not fit, unanimous ballots cannot claim
       severity: 'high',
     })) })
     : response(id, prompt));
-  assert.ok((session.consensus?.contextOmittedCriticalIds?.length ?? 0) > 0);
-  assert.equal(session.consensus?.status, 'incomplete');
-  assert.match(session.consensus?.reportMarkdown ?? '', /omitted from model context/i);
+  assert.equal(session.consensus?.contextOmittedCriticalIds?.length, 0);
+  assert.equal(session.consensus?.objectionCoverage?.included, session.objections.length);
+  assert.equal(session.consensus?.status, 'blocked');
+  assert.equal(session.consensus?.blockingObjectionIds.length, session.objections.length);
 });
