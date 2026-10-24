@@ -36,6 +36,8 @@ const authenticated = ref(true);
 const accessToken = ref('');
 const authError = ref('');
 const resumeConfirm = ref(false);
+const retrySelected = ref<string[]>([]);
+watch(() => debate.value?.id, () => { retrySelected.value = []; resumeConfirm.value = false; });
 const connection = ref('');
 const detected = ref<Partial<Record<ProviderId, boolean>>>({});
 const activeProposal = ref<ProviderId | null>(null);
@@ -93,27 +95,58 @@ async function authenticate() {
     }
   } catch (e) { authError.value = e instanceof Error ? e.message : 'Authentication failed.'; }
 }
-const uncertainCalls = computed(() => (debate.value?.entries ?? []).filter(e =>
-  (e.status === 'issued' || e.status === 'uncertain') && !e.retryAuthorized));
+const recoverableCalls = computed(() => {
+  const session = debate.value;
+  if (!session) return [] as Array<{id: string; provider: string; phase: string; status: string; uncertain: boolean}>;
+  const entries = session.entries
+    .filter(e => !e.retryAuthorized &&
+      (e.status === 'issued' || e.status === 'uncertain' ||
+        (session.status === 'partial' && (e.status === 'rejected' || e.status === 'skipped'))))
+    .map(e => ({id:e.id,provider:e.provider,phase:e.phase,status:e.status,
+      uncertain: e.status === 'issued' || e.status === 'uncertain'}));
+  const journal = [
+    ...(session.consensus?.callJournal ?? []).map(c => ({...c,phase:c.stage})),
+    ...(session.consensus?.negotiationCalls ?? []).map(c => ({...c,phase:c.role})),
+  ].filter(c => !c.retryAuthorized && (c.status === 'issued' || c.status === 'rejected'))
+    .map(c => ({id:c.id,provider:c.provider,phase:c.phase,status:c.status,
+      uncertain:c.status==='issued'}));
+  return [...entries,...journal];
+});
+const canRecover = computed(() => {
+  const d=debate.value;
+  return !!d && (d.status === 'interrupted' ||
+    d.status === 'partial' ||
+    (d.status === 'completed' && d.consensus?.status === 'incomplete'));
+});
 async function resumeInterrupted() {
   if (!debate.value || pending.value) return;
   const id = debate.value.id;
-  const hasUncertain = uncertainCalls.value.length > 0;
-  if (hasUncertain && !resumeConfirm.value) {
-    error.value = 'Review the uncertain calls and explicitly acknowledge potential duplicate provider usage before resuming.';
+  const requested = retrySelected.value;
+  if (recoverableCalls.value.some(c => c.uncertain && !requested.includes(c.id))) {
+    error.value = 'Select every uncertain call before resuming. Its provider may already have charged for it.';
+    return;
+  }
+  if (debate.value.status === 'partial' && !requested.some(callId =>
+      debate.value?.entries.some(e=>e.id===callId && ['rejected','skipped'].includes(e.status)))) {
+    error.value = 'Choose the failed debate step you explicitly authorize for retry.';
+    return;
+  }
+  if (requested.length && !resumeConfirm.value) {
+    error.value = 'Authorize the exact selected calls and acknowledge possible duplicate usage.';
     return;
   }
   error.value = '';
   try {
     const response = await fetch('/api/debates/' + encodeURIComponent(id) + '/resume', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ retryCallIds: hasUncertain ? uncertainCalls.value.map(e => e.id) : [],
-        acknowledgeMayRepeatCall: hasUncertain && resumeConfirm.value }),
+      body: JSON.stringify({ retryCallIds: requested,
+        acknowledgeMayRepeatCall: requested.length > 0 && resumeConfirm.value }),
     });
-    const data = await response.json() as { error?: string };
+    const data = await response.json() as {error?:string};
     if (!response.ok) throw new Error(data.error ?? 'Unable to resume this debate.');
-    resumeConfirm.value = false;
-    pending.value = true;
+    resumeConfirm.value=false;
+    retrySelected.value=[];
+    pending.value=true;
     await loadSession(id);
     subscribe(id);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : 'Resume failed.'; }
@@ -299,15 +332,22 @@ onBeforeUnmount(closeStream);
           <p v-if="error" class="error" role="alert">{{ error }}</p>
           <p v-if="connection" class="warning" role="status">{{ connection }}</p>
           <button v-if="pending && debate" class="cancel-action" type="button" @click="cancelDebate">Cancel current debate</button>
-          <div v-if="debate?.status === 'interrupted' && !pending" class="resume-box">
-            <h3>Recover interrupted debate</h3>
-            <p v-if="!uncertainCalls.length" class="muted">Previously completed stages will be reused. Pending safe stages can continue.</p>
+          <div v-if="canRecover && !pending" class="resume-box">
+            <h3>Resume from verified checkpoint</h3>
+            <p class="muted">Successful stages and frozen ballots are retained. Resume uses the original deadline and call budget; expired sessions cannot be extended.</p>
+            <p v-if="!recoverableCalls.length" class="muted">No explicit retries are pending. Only not-yet-issued stages can run.</p>
             <template v-else>
-              <p class="warning">{{ uncertainCalls.length }} CLI calls had an unknown outcome at the time of interruption. A retry may consume provider quota twice.</p>
-              <p v-for="call in uncertainCalls" :key="call.id" class="muted">{{ call.provider }} · {{ call.phase }} · {{ call.id }}</p>
-              <label class="consensus-toggle"><input v-model="resumeConfirm" type="checkbox" /> I authorize retrying these exact uncertain calls and accept possible duplicate usage</label>
+              <p class="warning">Select the exact failed or uncertain provider calls to retry. Uncertain calls may already have consumed quota. Previously completed results are never automatically replayed.</p>
+              <label v-for="call in recoverableCalls" :key="call.id" class="consensus-toggle">
+                <input v-model="retrySelected" type="checkbox" :value="call.id" />
+                {{ call.provider }} · {{ call.phase }} · {{ call.status }} · {{ call.id }}
+              </label>
+              <label class="consensus-toggle">
+                <input v-model="resumeConfirm" type="checkbox" />
+                I explicitly authorize retrying the selected calls, including potential duplicate usage
+              </label>
             </template>
-            <button type="button" class="download-report" :disabled="uncertainCalls.length > 0 && !resumeConfirm" @click="resumeInterrupted">Resume safely</button>
+            <button type="button" class="download-report" :disabled="retrySelected.length > 0 && !resumeConfirm" @click="resumeInterrupted">Resume checkpoint →</button>
           </div>
         </section>
         <section v-if="debate" class="results" aria-live="polite">

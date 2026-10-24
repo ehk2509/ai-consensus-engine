@@ -82,9 +82,9 @@ test('resuming after original wall-clock deadline never makes another model call
     store:new DebateStore(dir),adapters:adapters(n=>called.push(n))});
   try {
     const response=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',payload:{}});
-    assert.equal(response.statusCode,202);
+    assert.equal(response.statusCode,409);
+    assert.match(response.json().error,/deadline.*expired/i);
     const done=await status(app,session.id);
-    assert.equal(done.status,'budget_exhausted');
     assert.equal(done.calls,1);
     assert.deepEqual(called,[]);
   } finally {await app.close();await rm(dir,{recursive:true,force:true});}
