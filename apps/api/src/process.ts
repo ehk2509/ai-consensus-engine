@@ -129,8 +129,8 @@ export async function runAgentProcess(spec: ProcessSpec): Promise<string> {
         if (timedOut) return reject(new AgentExecutionError('Provider timed out.'));
         if (exceeded) return reject(new AgentExecutionError('Provider output exceeded safety limit.'));
         if (code !== 0) return reject(new AgentExecutionError('Provider exited unsuccessfully. Check CLI login and configuration.'));
-        const result = Buffer.concat(stdout).toString('utf8').trim();
-        if (!result) return reject(new AgentExecutionError('Provider returned an empty result.'));
+        const result = Buffer.concat(stdout).toString('utf8');
+        if (!result.trim()) return reject(new AgentExecutionError('Provider returned an empty result.'));
         resolve(result);
       });
       child.stdin.on('error', () => { /* Child may exit before stdin finishes. */ });
