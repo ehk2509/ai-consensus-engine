@@ -57,7 +57,7 @@ const validBudget = computed(() => unlimitedBudget.value ||
    maxDurationMinutes.value <= 10080));
 const validSynthesis = computed(() => Number.isSafeInteger(synthesisTimeoutSeconds.value) &&
   synthesisTimeoutSeconds.value >= 30 && synthesisTimeoutSeconds.value <= 1800);
-const valid = computed(() => prompt.value.trim().length >= 10 && prompt.value.length <= 12000 &&
+const valid = computed(() => prompt.value.trim().length >= 10 && prompt.value.length <= 1000000 &&
   selected.value.length >= (mode.value === 'debate' ? 2 : 1) && authenticated.value &&
   (mode.value !== 'debate' || (validBudget.value && (!consensusEnabled.value || validSynthesis.value))));
 const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry) =>
@@ -310,8 +310,8 @@ onBeforeUnmount(closeStream);
             <button type="button" :class="{ active: mode === 'independent' }" :disabled="pending" @click="mode = 'independent'">Independent proposals</button>
           </div>
           <label for="prompt">Your idea or question</label>
-          <textarea id="prompt" v-model="prompt" maxlength="12000" :disabled="pending" placeholder="Describe a product idea, technical decision, or subject the council should challenge and improve…" />
-          <div class="row small"><span>Minimum 10 characters</span><span>{{ prompt.length.toLocaleString() }} / 12,000</span></div>
+          <textarea id="prompt" v-model="prompt" :disabled="pending" placeholder="Describe a product idea, technical decision, or subject the council should challenge and improve…" />
+          <div class="row small"><span>Minimum 10 characters</span><span>{{ prompt.length.toLocaleString() }} characters (up to 1,000,000; never silently clipped)</span></div>
           <div class="separate" />
           <h3>Select your council <span class="muted">({{ mode === 'debate' ? 'at least 2' : 'at least 1' }})</span></h3>
           <div class="providers">
@@ -430,7 +430,7 @@ onBeforeUnmount(closeStream);
             <p class="muted">Consensus records model judgments, not externally verified facts. The facilitator's self-authored vote is identified and cannot alone satisfy the non-author acceptance requirement.</p>
             <p class="muted">Quorum: {{ debate.consensus.policy.quorum.replace('_', '-') }} · Critical objection gate: {{ debate.consensus.policy.blockCritical ? 'Enabled' : 'Disabled' }} · {{ debate.consensus.votes.length }} ballots</p>
             <p v-if="debate.consensus.objectionGroups" class="muted">{{ debate.consensus.objectionGroups.filter(g => g.objectionIds.length > 1).length }} similar-objection groups detected for review; all original objection IDs are preserved.</p>
-            <p v-if="debate.consensus.objectionCoverage" class="muted">Shared objection context: {{ debate.consensus.objectionCoverage.included }}/{{ debate.consensus.objectionCoverage.total }} records included as excerpts · {{ debate.consensus.objectionCoverage.omitted }} omitted, including {{ debate.consensus.objectionCoverage.omittedCritical }} critical. Synthesis and ballots use the same global ledger (SHA-256: {{ debate.consensus.objectionCoverage.contextSha256.slice(0, 12) }}…).</p>
+            <p v-if="debate.consensus.objectionCoverage" class="muted">Shared objection context: {{ debate.consensus.objectionCoverage.included }}/{{ debate.consensus.objectionCoverage.total }} complete recorded objections · {{ debate.consensus.objectionCoverage.omitted }} omitted, including {{ debate.consensus.objectionCoverage.omittedCritical }} critical. Synthesis and ballots use the same global ledger (SHA-256: {{ debate.consensus.objectionCoverage.contextSha256.slice(0, 12) }}…).</p>
             <p v-if="debate.consensus.contextOmittedCriticalIds?.length" class="warning">{{ debate.consensus.contextOmittedCriticalIds.length }} critical objections could not fit into model context. Consensus cannot be verified.</p>
             <p v-if="debate.consensus.status === 'blocked_by_unparseable_evidence'" class="warning">Parsing/incomplete-source evidence prevents final consensus. This is not the same as a substantive disagreement.</p>
             <div v-if="debate.consensus.negotiationHistory?.length" class="resolution-audit">
