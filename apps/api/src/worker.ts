@@ -178,7 +178,20 @@ export class DurableDebateWorker {
         v.draftSha256 === cycle?.revisedDraftSha256);
       return false;
     });
-    const mandatory = [...debateCalls, ...unknown, ...requiredRejected];
+    // Any ONE explicitly authorized rejected synthesis call can seed recovery.
+    // Untried fallback providers are new calls, not replays, and require no retry ID.
+    // Keep every prior rejection in the ledger for audit; never silently reissue it.
+    const failedSynthesis = requiredRejected.filter(c => 'stage' in c && c.stage === 'synthesis');
+    const untriedFallback = !!failedSynthesis.length && session.request.synthesisFallback !== false &&
+      session.request.providers.some(provider => !ledger.some(c => 'stage' in c &&
+        c.stage === 'synthesis' && c.provider === provider));
+    if (failedSynthesis.length && !untriedFallback &&
+        !failedSynthesis.some(c => requested.has(c.id))) {
+      return conflict('Choose at least one failed synthesis call for an explicit retry. Other attempts remain preserved.',
+        failedSynthesis.map(c => c.id));
+    }
+    const mandatory = [...debateCalls, ...unknown, ...requiredRejected.filter(c =>
+      !('stage' in c && c.stage === 'synthesis'))];
     if (mandatory.some(e => !requested.has(e.id))) {
       return conflict('Uncertain or unresolved failed provider calls need exact IDs and explicit duplicate-charge authorization.',
         mandatory.map(e => e.id));
