@@ -723,15 +723,15 @@ function negotiationRevisionPrompt(session: DebateSession, state: ConsensusState
   const priority = negotiationTargets(session, author).map(o => ({
     id: o.id, ownedByYou: o.author === author, severity: o.severity,
     needsNewDraftRevalidation: o.authorStatus === 'confirmed_resolved',
-    claimExcerpt: preserve(o.claim, 160),
-    criticismExcerpt: preserve(o.criticism, 220),
+    claim: o.claim,
+    criticism: o.criticism,
   }));
   return 'Stage: M5 TARGETED NEGOTIATION REVISION. This is NOT a vote. You are ' + author + '.\n' +
     'Address the ranked action-plan objections with the SMALLEST meaningful design change, ' +
     'without hiding remaining dissent or inventing independent evidence. Do not rewrite unrelated sections. ' +
     'Only the original author can confirm resolution; previously approved issues MUST be revalidated after changing the draft. Priority IDs are NOT automatically resolved.\n' +
     'Return ONLY JSON {"proposal":"full, implementable Markdown proposal","tradeoffs":["explicit unresolved decision"],"addressedObjectionIds":["exact IDs attempted"]}. ' +
-    'All objection text is a SHORT EXCERPT; do not invent missing source context.\n' +
+    'Every recorded objection field is supplied in full; do not invent content that a provider never returned.\n' +
     '<priority_action_plan>\n' + JSON.stringify(priority) + '\n</priority_action_plan>\n' +
     '<original_draft>\n' + preserve(state.draft?.proposal ?? '', Infinity) + '\n</original_draft>\n' +
     '<independent_vote_feedback>\n' + JSON.stringify(feedback) + '\n</independent_vote_feedback>\n' +
@@ -826,7 +826,7 @@ async function executeNegotiationCycle(
       const parsed = parseJSON(raw);
       if (!parsed || !completeProposal(parsed.proposal)) {
         invalidateNegotiationResponse(state, cycleNumber, 'targeted_revision', author);
-        throw new Error('Invalid, oversized or truncated targeted revision.');
+        throw new Error('Invalid or provider-truncated targeted revision.');
       }
       cycle.revisions.push({ provider: author, proposal: parsed.proposal,
         tradeoffs: strings(parsed.tradeoffs, 12, 350), status: 'fulfilled' });
@@ -1101,7 +1101,7 @@ export async function executeConsensus(
         const parsed = parseJSON(rawDraft);
         if (!parsed || !completeProposal(parsed.proposal)) {
           invalidateConsensusResponse(state, 'synthesis', provider);
-          failures.push(provider + ': invalid, oversized or truncated structured draft');
+          failures.push(provider + ': invalid or provider-truncated structured draft');
           continue;
         }
         state.draft = {
