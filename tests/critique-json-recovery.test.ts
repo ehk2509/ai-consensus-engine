@@ -53,7 +53,7 @@ test('malformed recovered records are rejected, preserving valid complete object
   assert.ok(result.errors.some(x => x.includes('malformed structured objection')));
 });
 
-test('stored critique diagnostics use original response length and a preview only, not misleading display truncation', async () => {
+test('stored critique diagnostics link to the full uncut original response', async () => {
   const long = '{"strengths":[' + JSON.stringify('A'.repeat(1200)) +
     '],"objections":[{"claim":"Recruit five to eight founders or venture resear';
   const providers: ProviderId[] = ['codex', 'claude'];
@@ -74,8 +74,9 @@ test('stored critique diagnostics use original response length and a preview onl
   assert.deepEqual(critique?.critiqueParsing, { status: 'incomplete', originalChars: long.length, recoveredObjections: 0 });
   const failure = session.objections.find(o => o.sourceEntryId === critique?.id && o.kind === 'parsing_failure');
   assert.ok(failure);
-  assert.match(failure.criticism, /only for display/);
-  assert.match(failure.criticism, /Original provider response length:/);
+  assert.equal(critique?.content, long);
+  assert.match(failure.criticism, /Full provider response \(unparsed and not validated as a critique\)/);
+  assert.ok(failure.criticism.includes(long));
   assert.doesNotMatch(failure.criticism, /Truncated for context or display/);
   assert.equal(session.objections.some(o => o.kind === 'substantive' && o.author === 'codex'), false);
 });

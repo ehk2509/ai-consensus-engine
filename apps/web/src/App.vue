@@ -57,7 +57,7 @@ const validBudget = computed(() => unlimitedBudget.value ||
    maxDurationMinutes.value <= 10080));
 const validSynthesis = computed(() => Number.isSafeInteger(synthesisTimeoutSeconds.value) &&
   synthesisTimeoutSeconds.value >= 30 && synthesisTimeoutSeconds.value <= 1800);
-const valid = computed(() => prompt.value.trim().length >= 10 && prompt.value.length <= 12000 &&
+const valid = computed(() => prompt.value.trim().length >= 10 && prompt.value.length <= 1000000 &&
   selected.value.length >= (mode.value === 'debate' ? 2 : 1) && authenticated.value &&
   (mode.value !== 'debate' || (validBudget.value && (!consensusEnabled.value || validSynthesis.value))));
 const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry) =>
@@ -247,7 +247,7 @@ async function submit() {
     const isDebate = mode.value === 'debate';
     const response = await fetch(isDebate ? '/api/debates' : '/api/brainstorms', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, unlimitedBudget: unlimitedBudget.value,
+      body: JSON.stringify({ prompt: prompt.value, providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, unlimitedBudget: unlimitedBudget.value,
       ...(!unlimitedBudget.value ? { maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000 } : {}),
       consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value,
       synthesisTimeoutMs: synthesisTimeoutSeconds.value * 1000, synthesisFallback: synthesisFallback.value,
@@ -310,8 +310,8 @@ onBeforeUnmount(closeStream);
             <button type="button" :class="{ active: mode === 'independent' }" :disabled="pending" @click="mode = 'independent'">Independent proposals</button>
           </div>
           <label for="prompt">Your idea or question</label>
-          <textarea id="prompt" v-model="prompt" maxlength="12000" :disabled="pending" placeholder="Describe a product idea, technical decision, or subject the council should challenge and improve…" />
-          <div class="row small"><span>Minimum 10 characters</span><span>{{ prompt.length.toLocaleString() }} / 12,000</span></div>
+          <textarea id="prompt" v-model="prompt" :disabled="pending" placeholder="Describe a product idea, technical decision, or subject the council should challenge and improve…" />
+          <div class="row small"><span>Minimum 10 characters</span><span>{{ prompt.length.toLocaleString() }} characters (up to 1,000,000; never silently clipped)</span></div>
           <div class="separate" />
           <h3>Select your council <span class="muted">({{ mode === 'debate' ? 'at least 2' : 'at least 1' }})</span></h3>
           <div class="providers">
@@ -378,7 +378,7 @@ onBeforeUnmount(closeStream);
           </div>
         </section>
         <section v-if="debate" class="results" aria-live="polite">
-          <div class="section-top"><h2>Debate timeline</h2><span>{{ debate.id.slice(0, 8) }} · {{ debate.status.toUpperCase() }}</span></div>
+          <div class="section-top"><h2>Debate timeline</h2><span>{{ debate.id }} · {{ debate.status.toUpperCase() }}</span></div>
           <div class="panel status-panel">
             <div class="row"><strong>{{ completed ? 'Session finished' : 'Council deliberating' }}</strong><span class="pill" :class="debate.status === 'completed' ? 'fulfilled' : debate.status === 'running' ? 'working' : 'rejected'">{{ debate.status.toUpperCase() }}</span></div>
             <p class="muted">Round {{ debate.round }} / {{ debate.request.maxRounds }} · {{ completedCount }} successful debate steps · {{ debate.calls ?? 0 }} / {{ debate.request.unlimitedBudget ?? (debate.request.maxCalls === undefined && debate.request.maxDurationMs === undefined) ? '∞' : (debate.request.maxCalls ?? 40) }} calls</p>
@@ -430,7 +430,7 @@ onBeforeUnmount(closeStream);
             <p class="muted">Consensus records model judgments, not externally verified facts. The facilitator's self-authored vote is identified and cannot alone satisfy the non-author acceptance requirement.</p>
             <p class="muted">Quorum: {{ debate.consensus.policy.quorum.replace('_', '-') }} · Critical objection gate: {{ debate.consensus.policy.blockCritical ? 'Enabled' : 'Disabled' }} · {{ debate.consensus.votes.length }} ballots</p>
             <p v-if="debate.consensus.objectionGroups" class="muted">{{ debate.consensus.objectionGroups.filter(g => g.objectionIds.length > 1).length }} similar-objection groups detected for review; all original objection IDs are preserved.</p>
-            <p v-if="debate.consensus.objectionCoverage" class="muted">Shared objection context: {{ debate.consensus.objectionCoverage.included }}/{{ debate.consensus.objectionCoverage.total }} records included as excerpts · {{ debate.consensus.objectionCoverage.omitted }} omitted, including {{ debate.consensus.objectionCoverage.omittedCritical }} critical. Synthesis and ballots use the same global ledger (SHA-256: {{ debate.consensus.objectionCoverage.contextSha256.slice(0, 12) }}…).</p>
+            <p v-if="debate.consensus.objectionCoverage" class="muted">Shared objection context: {{ debate.consensus.objectionCoverage.included }}/{{ debate.consensus.objectionCoverage.total }} complete recorded objections · {{ debate.consensus.objectionCoverage.omitted }} omitted, including {{ debate.consensus.objectionCoverage.omittedCritical }} critical. Synthesis and ballots use the same global ledger (SHA-256: {{ debate.consensus.objectionCoverage.contextSha256 }}).</p>
             <p v-if="debate.consensus.contextOmittedCriticalIds?.length" class="warning">{{ debate.consensus.contextOmittedCriticalIds.length }} critical objections could not fit into model context. Consensus cannot be verified.</p>
             <p v-if="debate.consensus.status === 'blocked_by_unparseable_evidence'" class="warning">Parsing/incomplete-source evidence prevents final consensus. This is not the same as a substantive disagreement.</p>
             <div v-if="debate.consensus.negotiationHistory?.length" class="resolution-audit">
@@ -484,7 +484,7 @@ onBeforeUnmount(closeStream);
           </div>
         </section>
         <section v-if="result" class="results">
-          <div class="section-top"><h2>Independent perspectives</h2><span>{{ result.status.toUpperCase() }} · {{ result.runId.slice(0, 8) }}</span></div>
+          <div class="section-top"><h2>Independent perspectives</h2><span>{{ result.status.toUpperCase() }} · {{ result.runId }}</span></div>
           <div class="result-grid">
             <article v-for="proposal in result.proposals.filter((p) => activeProposal === null || p.provider === activeProposal)" :key="proposal.provider" class="panel result-card" :class="{ wide: activeProposal !== null }">
               <div class="row"><strong>{{ labels[proposal.provider] }}</strong><span class="pill" :class="proposal.status">{{ proposal.status === 'fulfilled' ? 'RESPONDED' : 'FAILED' }}</span></div>

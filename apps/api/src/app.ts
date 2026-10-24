@@ -17,7 +17,7 @@ export function makeApp(options: AppOptions = {}) {
   if (!(options.apiToken ?? process.env.ACE_API_TOKEN) && !options.allowUnauthenticatedForTests) {
     throw new Error('API access token is mandatory. Only tests may explicitly opt out.');
   }
-  const app = Fastify({ logger: true, bodyLimit: 16 * 1024 });
+  const app = Fastify({ logger: true, bodyLimit: 4 * 1024 * 1024 });
   const baseAdapters = options.adapters ?? createAdapters();
   const store = options.store ?? new DebateStore(process.env.ACE_DATA_DIR);
   const quota = new DailyCallQuota(store.getDirectory(), options.quotaLimits ?? environmentQuotaLimits(process.env));
@@ -41,7 +41,7 @@ export function makeApp(options: AppOptions = {}) {
   app.addHook('onReady', async () => { await worker.start(); });
   app.addHook('onClose', async () => { await worker.stop(); });
 
-  app.get('/api/health', async () => ({ status: 'ok', version: '0.5.5', milestone: 'M5.5' }));
+  app.get('/api/health', async () => ({ status: 'ok', version: '0.5.6', milestone: 'M5.6' }));
   app.get('/api/metrics', async () => ({
     status: 'ok', worker: { running: !!worker.running, queued: worker.queued },
     calls: worker.counters, dailyQuota: await quota.snapshot(),

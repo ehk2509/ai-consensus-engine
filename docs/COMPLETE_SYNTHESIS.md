@@ -1,13 +1,13 @@
-# M5.5 — Complete synthesis integrity and audit coverage
+# M5.5–M5.6 — Complete synthesis integrity and lossless evidence
 
 A live v0.5.4 council showed a new failure pattern: the facilitator completed synthesis but generated a draft longer than the engine's 18,000-character frozen-proposal limit. The previous engine **silently cut the proposal mid-table**, appended `[Context truncated]`, signed the shortened text with a draft SHA-256 and sent it to all three voters. Correct conditional votes could not inspect the missing tail.
 
 ## Guarantees for new runs
 
-- No model-generated proposal is silently clipped and frozen. Initial synthesis and negotiated re-synthesis reject a draft longer than 18,000 characters or containing known `[Context truncated]` / `[Truncated for context or display...]` markers. Affected journaled calls are marked rejected, with safe fallback only to a selected provider and subject to quota, timeouts and budgets.
-- Targeted M5 revisions are similarly rejected if oversized or explicitly truncated, rather than creating incomplete inputs for revised consensus.
-- Model synthesis instructions aim for under 14,000 characters and a complete conclusion. They instruct the model not to reconstruct an enormous per-ID objection table inside the draft.
-- The decision record always includes a **deterministic complete objection register** with every stored objection's ID, round, author, target, severity, parsing-failure kind and current author status, independently of what the facilitator wrote. This does not turn excerpts into full original critiques or claim that any objection was resolved.
+- **M5.6:** Complete model-generated proposals are preserved without an application length ceiling. Initial synthesis and negotiated re-synthesis reject only malformed/incomplete content or known upstream truncation markers (such as `[Context truncated]`), not valid long drafts. Invalid calls remain journaled and fallback stays restricted to selected providers.
+- M5 targeted revisions, independent votes and follow-ups preserve complete successful model responses. An incomplete response is rejected, not silently cut.
+- Model synthesis instructions require complete sections and a conclusion with no artificial character target. The per-ID objection register is generated deterministically, without duplicating it unnecessarily in model prose.
+- The decision record includes a **complete deterministic objection register** with every stored objection's ID, round, author, target, severity, claim, criticism, evidence, suggested change, reply, parsing status, source entry and author status. The shared context also includes complete stored fields. Neither reconstructs text that a provider never returned.
 - The report now explicitly states how many negotiation cycles were requested and attempted. A parsing-failure sentinel is deliberately not silently negotiated away, even when negotiation was requested.
 
 ## Interpreting the recorded result
@@ -18,12 +18,16 @@ The output status `disputed`, `blocked`, or `incomplete` may therefore be correc
 
 ## Historical sessions
 
-SHA-256-frozen old drafts, their ballots, and signoffs are **immutable**. Upgrading to M5.5 does not silently rewrite a draft that was previously shortened. For a previous `disputed` final record with `[Context truncated]`, start a new debate after updating the app. A running/unsettled session is only eligible for `/resume` under the existing exact-call journal and deadline rules.
+SHA-256-frozen old drafts, their ballots, and signoffs are **immutable**. Upgrading to M5.6 does not silently rewrite a draft that was previously shortened. For a previous `disputed` final record with `[Context truncated]`, start a new debate after updating the app. A running/unsettled session is only eligible for `/resume` under the existing exact-call journal and deadline rules.
 
 This release **does not** repair a critique JSON record that the provider itself ended before completing. That is a separate evidence-integrity problem. Using a truncated or unparseable critique as proof of resolution would be unsafe.
 
 ## Verification
 
-The regression suite simulates oversized structured synthesis, explicit truncation markers, complete rejection when no provider produces a valid draft, oversized M5 revisions and exact per-ID objection coverage. CI also runs the existing crash, recovery, TypeScript, API and frontend checks. Real authenticated three-CLI evaluation remains a separate smoke test and may incur provider usage.
+The regression suite simulates long structured synthesis with no length-based rejection, incomplete-provider truncation markers, long M5 revisions, complete raw journals, full objection context and exact per-ID coverage. CI also runs the existing crash, recovery, TypeScript, API and frontend checks. Real authenticated three-CLI evaluation remains a separate smoke test and may incur provider usage.
 
 Note: a provider might submit an apparently coherent JSON proposal that omits substantive issues without any truncation marker. This patch cannot prove semantic completeness; independent voting and original-author objection gates remain necessary.
+
+## Resource and provider limits
+
+There is **no silent application-level shortening** of successfully returned provider content. New prompts are accepted up to 1,000,000 characters; larger request bodies fail explicitly. Provider subprocess stdout still has an **8 MiB safety limit**: an over-limit result is rejected rather than partially used. Each selected model also has its own context window, output limits, quotas and execution timeouts. The council cannot override provider-owned restrictions or reconstruct missing bytes from interrupted output. Large full-context sessions can consume substantially more tokens and disk space.

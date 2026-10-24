@@ -18,7 +18,7 @@ function extractAntigravityResponse(raw: string): string {
   if (!result || typeof result !== 'object') throw new AgentExecutionError('Provider returned no result event.');
   if (result.status !== 'SUCCESS') throw new AgentExecutionError('Gemini (Antigravity) reported an execution error.');
   if (typeof result.response !== 'string' || !result.response.trim()) throw new AgentExecutionError('Provider returned no textual response.');
-  return result.response.trim();
+  return result.response;
 }
 
 export function extractResponse(id: ProviderId, raw: string): string {
@@ -32,7 +32,7 @@ export function extractResponse(id: ProviderId, raw: string): string {
   if (id === 'claude' && obj.is_error === true) throw new AgentExecutionError('Claude reported an execution error.');
   const response = id === 'claude' ? obj.result : obj.response;
   if (typeof response !== 'string' || !response.trim()) throw new AgentExecutionError('Provider returned no textual response.');
-  return response.trim();
+  return response;
 }
 
 export async function probeInstalledClis(): Promise<Array<{ id: ProviderId; installed: boolean }>> {

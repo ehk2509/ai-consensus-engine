@@ -5,15 +5,15 @@ import { PROVIDER_IDS } from './types.ts';
 export function validateRequest(input: unknown): BrainstormRequest {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('A JSON object is required.');
   const value = input as Record<string, unknown>;
-  if (typeof value.prompt !== 'string' || value.prompt.trim().length < 10 || value.prompt.length > 12000) {
-    throw new Error('Prompt must contain 10–12,000 characters.');
+  if (typeof value.prompt !== 'string' || value.prompt.trim().length < 10 || value.prompt.length > 1000000) {
+    throw new Error('Prompt must contain 10–1,000,000 characters; oversize requests are rejected, never clipped.');
   }
   if (!Array.isArray(value.providers) || value.providers.length === 0 || value.providers.length > PROVIDER_IDS.length ||
       !value.providers.every((id: unknown) => PROVIDER_IDS.includes(id as typeof PROVIDER_IDS[number])) ||
       new Set(value.providers).size !== value.providers.length) {
     throw new Error('Select one or more unique supported providers.');
   }
-  return { prompt: value.prompt.trim(), providers: value.providers as BrainstormRequest['providers'] };
+  return { prompt: value.prompt, providers: value.providers as BrainstormRequest['providers'] };
 }
 
 function safeError(error: unknown): string {
