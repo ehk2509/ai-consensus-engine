@@ -75,7 +75,8 @@ test('stored critique diagnostics link to the full uncut original response', asy
   const failure = session.objections.find(o => o.sourceEntryId === critique?.id && o.kind === 'parsing_failure');
   assert.ok(failure);
   assert.equal(critique?.content, long);
-  assert.match(failure.criticism, /Full provider response is stored in source entry/);
+  assert.match(failure.criticism, /Full provider response \(unparsed and not validated as a critique\)/);
+  assert.ok(failure.criticism.includes(long));
   assert.doesNotMatch(failure.criticism, /Truncated for context or display/);
   assert.equal(session.objections.some(o => o.kind === 'substantive' && o.author === 'codex'), false);
 });
