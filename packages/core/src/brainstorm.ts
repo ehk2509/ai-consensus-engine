@@ -13,7 +13,7 @@ export function validateRequest(input: unknown): BrainstormRequest {
       new Set(value.providers).size !== value.providers.length) {
     throw new Error('Select one or more unique supported providers.');
   }
-  return { prompt: value.prompt.trim(), providers: value.providers as BrainstormRequest['providers'] };
+  return { prompt: value.prompt, providers: value.providers as BrainstormRequest['providers'] };
 }
 
 function safeError(error: unknown): string {
