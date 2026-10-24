@@ -247,3 +247,58 @@ test('M5 negotiated re-synthesis falls back safely and re-votes against the new 
   assert.equal(session.consensus?.votes.find(v => v.provider === session.consensus?.draft?.author)?.authoredDraft, true);
   assert.equal(session.consensus?.votes.find(v => v.provider === preferred)?.authoredDraft, false);
 });
+
+
+test('failed M5 re-synthesis can resume with one authorized retry, preserving prior votes and revisions', async () => {
+  const session = createDebateSession(req({ negotiationCycles: 1 }));
+  const vote = (text: string) => {
+    const revised = text.includes('Recovered negotiated proposal');
+    return JSON.stringify({
+      verdict: revised ? 'accept' : 'conditional',
+      rationale: revised ? 'Recovery proposal is approved.' : 'The original draft needs negotiation.',
+      concerns: revised ? [] : ['Negotiate an improved proposal.'],
+      resolvedObjectionIds: [], supersessions: [],
+    });
+  };
+  await executeDebate(session, agents((id, text) => {
+    if (text.includes('Stage: M5 TARGETED NEGOTIATION REVISION'))
+      return JSON.stringify({ proposal: 'A full measurable new plan ' + id, tradeoffs: [], addressedObjectionIds: [] });
+    if (text.includes('Stage: M5 NEGOTIATED SYNTHESIS'))
+      throw new AgentExecutionError('Provider timed out.');
+    if (text.includes('Stage: INDEPENDENT CONSENSUS VOTE')) return vote(text);
+    return success(id, text);
+  }), async () => {});
+  assert.equal(session.consensus?.status, 'disputed');
+  assert.equal(session.consensus?.negotiationHistory?.[0]?.outcome, 'failed');
+  const failed = session.consensus?.negotiationCalls?.filter(x => x.role === 're_synthesis') ?? [];
+  assert.equal(failed.length, 3);
+  const priorVotes = session.consensus?.negotiationHistory?.[0]?.previousVotes;
+  const selected = failed[0]!.id;
+  let synthCalls = 0, revisionCalls = 0;
+  await withServer(session, (id, text) => {
+    if (text.includes('Stage: M5 TARGETED NEGOTIATION REVISION')) revisionCalls++;
+    if (text.includes('Stage: M5 NEGOTIATED SYNTHESIS')) {
+      synthCalls++;
+      return JSON.stringify({ proposal: 'Recovered negotiated proposal with a clear verification plan.',
+        assumptions: [], evidence: [], decisions: [] });
+    }
+    if (text.includes('Stage: INDEPENDENT CONSENSUS VOTE')) return vote(text);
+    return success(id, text);
+  }, async app => {
+    const noAuth = await app.inject({ method: 'POST',
+      url: '/api/debates/' + session.id + '/resume', payload: {} });
+    assert.equal(noAuth.statusCode, 409);
+    const resume = await app.inject({ method: 'POST',
+      url: '/api/debates/' + session.id + '/resume',
+      payload: { retryCallIds: [selected], acknowledgeMayRepeatCall: true } });
+    assert.equal(resume.statusCode, 202);
+    const done = await recovered(app, session.id);
+    assert.equal(done.consensus?.status, 'unanimous');
+    assert.equal(done.consensus?.negotiationHistory?.[0]?.outcome, 'completed');
+    assert.deepEqual(done.consensus?.negotiationHistory?.[0]?.previousVotes, priorVotes);
+    assert.equal(done.consensus?.negotiationCalls?.filter(x => x.role === 're_synthesis').length, 4);
+    assert.equal(done.consensus?.negotiationCalls?.filter(x => x.role === 're_synthesis' && x.retryAuthorized).length, 1);
+    assert.equal(synthCalls, 1);
+    assert.equal(revisionCalls, 0);
+  });
+});
