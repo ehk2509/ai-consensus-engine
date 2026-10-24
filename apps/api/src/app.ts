@@ -17,7 +17,7 @@ export function makeApp(options: AppOptions = {}) {
   if (!(options.apiToken ?? process.env.ACE_API_TOKEN) && !options.allowUnauthenticatedForTests) {
     throw new Error('API access token is mandatory. Only tests may explicitly opt out.');
   }
-  const app = Fastify({ logger: true, bodyLimit: 16 * 1024 });
+  const app = Fastify({ logger: true, bodyLimit: 4 * 1024 * 1024 });
   const baseAdapters = options.adapters ?? createAdapters();
   const store = options.store ?? new DebateStore(process.env.ACE_DATA_DIR);
   const quota = new DailyCallQuota(store.getDirectory(), options.quotaLimits ?? environmentQuotaLimits(process.env));
