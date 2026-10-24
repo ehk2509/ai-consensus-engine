@@ -564,8 +564,6 @@ async function negotiateCall(
   adapters: ReadonlyMap<string, AgentAdapter>, publish: DebatePublisher,
   signal: AbortSignal, deadlineMs?: number,
 ): Promise<string> {
-  if (signal.aborted || session.calls >= (session.request.maxCalls ?? 40) ||
-      (deadlineMs !== undefined && Date.now() >= deadlineMs)) throw new Error('Negotiation budget or deadline exhausted.');
   const promptSha256 = hash(prompt);
   const prior = [...(state.negotiationCalls ?? [])].reverse().find(c =>
     c.cycle === cycle && c.role === role && c.provider === provider &&
@@ -575,6 +573,10 @@ async function negotiateCall(
         !prior.rawResponse.includes('[Context truncated]')) return prior.rawResponse;
     throw new Error('Uncertain or invalid M5 call requires explicit operator authorization.');
   }
+  // Replay of a complete, journaled result is free. Only *new* CLI calls need
+  // remaining quota; never conflate a committed checkpoint with new usage.
+  if (signal.aborted || session.calls >= (session.request.maxCalls ?? 40) ||
+      (deadlineMs !== undefined && Date.now() >= deadlineMs)) throw new Error('Negotiation budget or deadline exhausted.');
   const record: NegotiationCall = {
     id: randomUUID(), cycle, role, provider, promptSha256,
     createdAt: new Date().toISOString(), status: 'issued',
@@ -757,8 +759,13 @@ async function executeNegotiationCycle(
   const fulfilledCalls = (state.negotiationCalls ?? []).filter(c =>
     c.cycle === cycleNumber && c.status === 'fulfilled' &&
     ['targeted_revision', 're_synthesis', 're_vote'].includes(c.role)).length;
+  // The original cycle reserved clarification and author-review headroom before
+  // running. On explicit crash recovery, that reservation has already happened:
+  // reconstruct known answers first, then fail closed on any *new* call that
+  // exceeds remaining limits. We must not discard paid-for completed outputs.
+  const resumeCheckpoint = !!existing && session.recovery?.kind === 'consensus';
   const reserveCalls = Math.max(0, negotiationCalls - fulfilledCalls) +
-    participants.length + signoffAuthors.size;
+    (resumeCheckpoint ? 0 : participants.length + signoffAuthors.size);
   cycle.priorityObjectionIds = [...new Set(participants.flatMap(p =>
     negotiationTargets(session, p).filter(o => isCritical(o)).map(o => o.id)))];
   if (interrupted(signal, deadlineMs)) {

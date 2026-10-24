@@ -315,3 +315,31 @@ test('M5.2 reconstructs a saved synthesis and all votes when the model budget is
     assert.equal(done.consensus?.callJournal?.filter(c=>c.status==='fulfilled').length,4);
   });
 });
+
+test('M5.2 reconstructs a saved negotiated re-vote when all model-call slots are spent',async()=>{
+  const session=await baseline(respond,1);
+  assert.equal(session.consensus?.status,'unanimous');
+  const callsBefore=session.calls;
+  const cycle=session.consensus!.negotiationHistory![0]!;
+  assert.equal(cycle.outcome,'completed');
+  const draftSha=session.consensus!.draft!.sha256;
+  session.request.maxCalls=callsBefore;
+  session.consensus!.votes=session.consensus!.votes.filter(v=>v.provider!=='claude');
+  cycle.outcome='interrupted';
+  cycle.newVotes=undefined;
+  session.consensus!.status='incomplete';
+  session.status='running';
+  session.finishedAt=undefined;
+  let repeats=0;
+  await withServer(session,(id,prompt)=>{repeats++;return respond(id,prompt);},async(app)=>{
+    const accepted=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',payload:{}});
+    assert.equal(accepted.statusCode,202);
+    const done=await completed(app,session.id);
+    assert.equal(done.consensus?.status,'unanimous');
+    assert.equal(done.consensus?.draft?.sha256,draftSha);
+    assert.equal(done.consensus?.negotiationHistory?.[0]?.outcome,'completed');
+    assert.equal(done.consensus?.votes.length,3);
+    assert.equal(done.calls,callsBefore);
+    assert.equal(repeats,0);
+  });
+});
