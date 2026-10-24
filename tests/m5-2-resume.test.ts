@@ -343,3 +343,42 @@ test('M5.2 reconstructs a saved negotiated re-vote when all model-call slots are
     assert.equal(repeats,0);
   });
 });
+
+test('Unlimited execution budget survives cold restart without expiry or call-count reset',async()=>{
+  const session=await baseline((id,prompt)=>prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')
+    ? JSON.stringify({verdict:'accept',rationale:'Validated the proposed architecture.',
+      concerns:[],resolvedObjectionIds:[],supersessions:[]}) : respond(id,prompt));
+  assert.equal(session.consensus?.status,'unanimous');
+  // Simulate an unlimited run already more expensive and older than legacy caps.
+  session.request.unlimitedBudget=true;
+  session.request.maxCalls=undefined;
+  session.request.maxDurationMs=undefined;
+  session.executionDeadlineAt=undefined;
+  session.createdAt=new Date(Date.now()-48*60*60*1000).toISOString();
+  session.calls=65;
+  const oldSha=session.consensus!.draft!.sha256;
+  const interruptedVote=session.consensus!.callJournal!.find(c=>c.stage==='vote'&&c.provider==='claude')!;
+  interruptedVote.status='rejected';
+  interruptedVote.rawResponse=undefined;
+  session.consensus!.votes=session.consensus!.votes.filter(v=>v.provider!=='claude');
+  session.consensus!.status='incomplete';
+  session.status='completed';
+  let repeats=0;
+  await withServer(session,(id,prompt)=>{
+    repeats++;
+    return prompt.includes('Stage: INDEPENDENT CONSENSUS VOTE')
+      ? JSON.stringify({verdict:'accept',rationale:'Validated the proposed architecture.',
+        concerns:[],resolvedObjectionIds:[],supersessions:[]}) : respond(id,prompt);
+  },async(app)=>{
+    const retry=await app.inject({method:'POST',url:'/api/debates/'+session.id+'/resume',
+      payload:{retryCallIds:[interruptedVote.id],acknowledgeMayRepeatCall:true}});
+    assert.equal(retry.statusCode,202);
+    const done=await completed(app,session.id);
+    assert.equal(done.consensus?.status,'unanimous');
+    assert.equal(done.consensus?.draft?.sha256,oldSha);
+    assert.equal(done.calls,66);
+    assert.equal(done.executionDeadlineAt,undefined);
+    assert.equal(done.request.unlimitedBudget,true);
+    assert.equal(repeats,1);
+  });
+});

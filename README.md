@@ -224,3 +224,27 @@ Sessions persist provider-call intentions **before** invoking external CLI accou
 **Consensus:** a complete saved synthesis or an independent ballot bound to the current frozen draft is reused. Durable response journals bridge crashes between a provider response and writing its parsed artifact. Invalid or potentially invoked calls require explicit authorization. An interrupted M5 cycle uses its saved revisions, candidate draft and vote records instead of restarting from zero.
 
 **Safety boundaries:** Older consensus sessions without sufficient write-ahead journals cannot be reconstructed; they return 409 rather than risking duplicate calls. Deadlines cannot be extended. Legacy sessions lacking a deadline derive a conservative one from their creation time. Call budgets and provider quota still count all retried calls. Rejected upstream work with successful downstream dependencies is not silently rewritten. Interrupted execution remains auditable in the local session JSON; neither external model correctness nor commercial usage rights are independently verified.
+
+## M5.3 — Unlimited execution budget by default
+
+New multi-model debates use **unlimited execution budget** by default. This removes the session-wide maximum model-call count and wall-clock deadline, allowing the configured debate rounds and negotiated consensus stages to complete without the previous 40-call / 15-minute default. It **does not** remove the individual provider invocation timeouts, provider subscription quotas, charges, the fixed round count, negotiation cycle limits, or the user-controlled Cancel action.
+
+### Configuring a custom budget
+
+In the web UI, **Execution budget → Unlimited calls and session duration** is enabled by default. Turn it off to set a numerical **Max calls** (2–10,000) and **Minutes** (1–10,080, i.e., seven days). The controls remain user-editable, not just a preset dropdown. A warning appears when the requested call limit is below estimated debate, voting, and follow-up calls.
+
+API examples:
+
+```json
+{"prompt":"Compare two implementation plans…","providers":["codex","claude","gemini"],"maxRounds":1,"consensus":true,"unlimitedBudget":true}
+```
+
+or, for a limited execution:
+
+```json
+{"prompt":"Compare two implementation plans…","providers":["codex","claude","gemini"],"maxRounds":1,"consensus":true,"unlimitedBudget":false,"maxCalls":80,"maxDurationMs":3600000}
+```
+
+For compatibility, API requests that **explicitly provide** `maxCalls` or `maxDurationMs` without `unlimitedBudget` continue to use finite budgets (missing counterpart falls back to 40 calls / 15 minutes). When the flag and both limits are omitted, new runs are unlimited. Passing numeric limits with `unlimitedBudget:true` is rejected as ambiguous rather than silently ignored.
+
+**Resume:** An unlimited session has no execution deadline; it still reuses completed checkpoints, requires explicit authorization for uncertain or rejected external calls, and never resets already recorded usage. Existing stored limited sessions remain limited to their original cap and deadline. The UI shows `∞` instead of a misleading hard call limit.

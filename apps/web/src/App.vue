@@ -15,10 +15,12 @@ const selected = ref<ProviderId[]>([...options]);
 const mode = ref<Mode>('debate');
 const prompt = ref('');
 const maxRounds = ref(1);
+const unlimitedBudget = ref(true);
 const maxCalls = ref(40);
 const maxDurationMinutes = ref(15);
 watch(maxRounds, (rounds) => {
-  // Later rounds require larger end-to-end budgets, but never increase provider calls.
+  // Only adjust user-chosen finite time budgets; unlimited stays unlimited.
+  if (unlimitedBudget.value) return;
   if (rounds === 3 && maxDurationMinutes.value < 30) maxDurationMinutes.value = 30;
   if (rounds === 2 && maxDurationMinutes.value < 20) maxDurationMinutes.value = 20;
 });
@@ -47,8 +49,13 @@ let stream: EventSource | null = null;
 let currentSessionId: string | null = null;
 let requestGeneration = 0;
 
+const validBudget = computed(() => unlimitedBudget.value ||
+  (Number.isSafeInteger(maxCalls.value) && maxCalls.value >= 2 && maxCalls.value <= 10000 &&
+   Number.isSafeInteger(maxDurationMinutes.value) && maxDurationMinutes.value >= 1 &&
+   maxDurationMinutes.value <= 10080));
 const valid = computed(() => prompt.value.trim().length >= 10 && prompt.value.length <= 12000 &&
-  selected.value.length >= (mode.value === 'debate' ? 2 : 1) && authenticated.value);
+  selected.value.length >= (mode.value === 'debate' ? 2 : 1) && authenticated.value &&
+  (mode.value !== 'debate' || validBudget.value));
 const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry) =>
   (visiblePhase.value === 'all' || entry.phase === visiblePhase.value) &&
   (visibleRound.value === -1 || entry.round === visibleRound.value)));
@@ -235,7 +242,9 @@ async function submit() {
     const isDebate = mode.value === 'debate';
     const response = await fetch(isDebate ? '/api/debates' : '/api/brainstorms', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000, consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value, negotiationCycles: negotiationCycles.value } : {}) }),
+      body: JSON.stringify({ prompt: prompt.value.trim(), providers: selected.value, ...(isDebate ? { maxRounds: maxRounds.value, unlimitedBudget: unlimitedBudget.value,
+      ...(!unlimitedBudget.value ? { maxCalls: maxCalls.value, maxDurationMs: maxDurationMinutes.value * 60000 } : {}),
+      consensus: consensusEnabled.value, quorum: quorum.value, blockCritical: blockCritical.value, negotiationCycles: negotiationCycles.value } : {}) }),
     });
     const body: unknown = await response.json();
     if (!response.ok) {
@@ -313,9 +322,18 @@ onBeforeUnmount(closeStream);
             </select>
           </div>
           <div v-if="mode === 'debate'" class="round-config">
-          <div><strong>Execution budget</strong><p class="muted">Never exceed this many model calls or minutes. Default one-round three-agent debate needs up to 15 calls.</p></div>
-          <div class="budget-controls"><label>Max calls <select v-model.number="maxCalls" :disabled="pending"><option v-for="n in [8, 15, 27, 39, 40]" :key="n" :value="n">{{ n }}</option></select></label><label>Minutes <select v-model.number="maxDurationMinutes" :disabled="pending"><option v-for="n in [3, 5, 10, 15, 20, 30]" :key="n" :value="n">{{ n }}</option></select></label></div>
-        </div>
+            <div>
+              <strong>Execution budget</strong>
+              <p class="muted">Unlimited by default. Turn it off to choose a maximum number of model calls and a total duration.</p>
+              <label class="consensus-toggle"><input v-model="unlimitedBudget" type="checkbox" :disabled="pending" aria-label="Unlimited execution budget" /> Unlimited calls and session duration</label>
+              <p v-if="unlimitedBudget" class="muted">No overall execution cap. Individual CLI calls still have timeouts, and provider quotas, usage charges, and manual cancellation still apply.</p>
+              <p v-else class="muted">Custom limits apply to the entire run and any later resume. Allowed: 2–10,000 calls and 1–10,080 minutes.</p>
+            </div>
+            <div v-if="!unlimitedBudget" class="budget-controls">
+              <label>Max calls <input v-model.number="maxCalls" type="number" min="2" max="10000" step="1" :disabled="pending" aria-label="Maximum model calls" /></label>
+              <label>Minutes <input v-model.number="maxDurationMinutes" type="number" min="1" max="10080" step="1" :disabled="pending" aria-label="Maximum session minutes" /></label>
+            </div>
+          </div>
         <div v-if="mode === 'debate'" class="consensus-config">
           <label class="consensus-toggle"><input v-model="consensusEnabled" type="checkbox" :disabled="pending" /> Generate independent consensus votes and final report</label>
           <div v-if="consensusEnabled" class="consensus-options">
@@ -325,8 +343,8 @@ onBeforeUnmount(closeStream);
             <label class="consensus-toggle"><input v-model="blockCritical" type="checkbox" :disabled="pending" /> Block unresolved critical objections</label>
             <label>Negotiation cycles <select v-model.number="negotiationCycles" :disabled="pending" aria-label="Maximum negotiation cycles"><option :value="0">Disabled</option><option :value="1">1 targeted cycle</option><option :value="2">2 targeted cycles</option></select></label>
           </div>
-          <p class="muted">Approximate maximum: {{ estimatedCalls }} model calls. Later revision rounds can take up to 4 minutes per provider call (within the overall time cap). A 3-round run may need 30 minutes. Each negotiation cycle reserves {{ selected.length * 2 + 1 }} model calls for targeted revisions, revised synthesis and independent re-votes. Consensus may optionally use up to {{ maximumFollowupCalls }} additional budgeted calls for ballot clarification and original-author objection sign-off. Voting never implies facts have been verified.</p>
-          <p v-if="estimatedCalls > maxCalls" class="warning" role="status">The configured {{ maxCalls }}-call budget may prevent consensus voting. Reduce rounds or turn off voting.</p>
+          <p class="muted">Estimated workload: {{ estimatedCalls }} model calls, excluding up to {{ maximumFollowupCalls }} additional clarification and author-review calls. Individual provider invocations may take up to 4 minutes. {{ unlimitedBudget ? 'No session-wide call or time cap is applied.' : 'All stages share your custom call and duration caps.' }} Voting never implies facts have been verified.</p>
+          <p v-if="!unlimitedBudget && estimatedCalls + maximumFollowupCalls > maxCalls" class="warning" role="status">The {{ maxCalls }}-call limit may prevent the council from finishing. Increase the limit or reduce debate rounds.</p>
         </div>
         <div class="row footer-row"><span class="muted">Local accounts · Traceable objections, independent votes, no forced agreement.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
           <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -334,7 +352,7 @@ onBeforeUnmount(closeStream);
           <button v-if="pending && debate" class="cancel-action" type="button" @click="cancelDebate">Cancel current debate</button>
           <div v-if="canRecover && !pending" class="resume-box">
             <h3>Resume from verified checkpoint</h3>
-            <p class="muted">Successful stages and frozen ballots are retained. Resume uses the original deadline and call budget; expired sessions cannot be extended.</p>
+            <p class="muted">Successful stages and frozen ballots are retained. {{ debate && (debate.request.unlimitedBudget ?? (debate.request.maxCalls === undefined && debate.request.maxDurationMs === undefined)) ? 'This run has no overall call or session time cap.' : 'Resume preserves the original deadline and call budget; expired sessions cannot be extended.' }}</p>
             <p v-if="!recoverableCalls.length" class="muted">No explicit retries are pending. Only not-yet-issued stages can run.</p>
             <template v-else>
               <p class="warning">Select the exact failed or uncertain provider calls to retry. Uncertain calls may already have consumed quota. Previously completed results are never automatically replayed.</p>
@@ -354,7 +372,7 @@ onBeforeUnmount(closeStream);
           <div class="section-top"><h2>Debate timeline</h2><span>{{ debate.id.slice(0, 8) }} · {{ debate.status.toUpperCase() }}</span></div>
           <div class="panel status-panel">
             <div class="row"><strong>{{ completed ? 'Session finished' : 'Council deliberating' }}</strong><span class="pill" :class="debate.status === 'completed' ? 'fulfilled' : debate.status === 'running' ? 'working' : 'rejected'">{{ debate.status.toUpperCase() }}</span></div>
-            <p class="muted">Round {{ debate.round }} / {{ debate.request.maxRounds }} · {{ completedCount }} successful debate steps · {{ debate.calls ?? 0 }}/{{ debate.request.maxCalls ?? 40 }} calls</p>
+            <p class="muted">Round {{ debate.round }} / {{ debate.request.maxRounds }} · {{ completedCount }} successful debate steps · {{ debate.calls ?? 0 }} / {{ debate.request.unlimitedBudget ?? (debate.request.maxCalls === undefined && debate.request.maxDurationMs === undefined) ? '∞' : (debate.request.maxCalls ?? 40) }} calls</p>
             <p class="muted">Debate result: <strong>{{ debate.debateStatus ?? (completed ? debate.status : 'running') }}</strong> · Consensus: <strong>{{ debate.consensus?.status ?? 'not requested' }}</strong></p>
             <div class="progress-track"><div class="progress-fill" :style="{ width: (completed ? 100 : Math.min(99, (debate.events.filter((event) => event.type === 'stage').length / (1 + debate.request.maxRounds * 3 + (debate.request.consensus ? 2 : 0))) * 100)) + '%' }" /></div>
             <p v-if="debate.phase" class="current-step">Current stage: {{ phaseTitles[debate.phase] }}</p>

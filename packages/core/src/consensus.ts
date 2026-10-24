@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { AgentAdapter, ProviderId } from './types.ts';
 import type { DebateObjection, DebateSession, DebatePublisher } from './debate.ts';
-import { recommendedTurnTimeoutMs } from './debate.ts';
+import { recommendedTurnTimeoutMs, executionCallLimit } from './debate.ts';
 import { packObjections } from './objection-utils.ts';
 import { groupRelatedObjections } from './objection-groups.ts';
 import type { ObjectionGroup } from './objection-groups.ts';
@@ -463,7 +463,7 @@ async function clarifyContradictions(
   session.phase = 'clarification';
   await notify(session, publish, 'stage', 'clarification');
   for (const original of bad) {
-    if (signal.aborted || session.calls >= (session.request.maxCalls ?? 40) ||
+    if (signal.aborted || session.calls >= executionCallLimit(session.request) ||
         (deadlineMs !== undefined && Date.now() >= deadlineMs)) break;
     const adapter = adapters.get(original.provider);
     if (!adapter || !state.draft) continue;
@@ -503,7 +503,7 @@ async function resolveOpenObjections(
   session.phase = 'resolution';
   await notify(session, publish, 'stage', 'resolution');
   for (const author of authors) {
-    if (signal.aborted || session.calls >= (session.request.maxCalls ?? 40) ||
+    if (signal.aborted || session.calls >= executionCallLimit(session.request) ||
         (deadlineMs !== undefined && Date.now() >= deadlineMs)) break;
     const own = pending.filter(o => o.author === author);
     const packed = packObjections(own, 13000);
@@ -575,7 +575,7 @@ async function negotiateCall(
   }
   // Replay of a complete, journaled result is free. Only *new* CLI calls need
   // remaining quota; never conflate a committed checkpoint with new usage.
-  if (signal.aborted || session.calls >= (session.request.maxCalls ?? 40) ||
+  if (signal.aborted || session.calls >= executionCallLimit(session.request) ||
       (deadlineMs !== undefined && Date.now() >= deadlineMs)) throw new Error('Negotiation budget or deadline exhausted.');
   const record: NegotiationCall = {
     id: randomUUID(), cycle, role, provider, promptSha256,
@@ -639,7 +639,7 @@ async function invokeInitialConsensus(
     }
     throw new Error('Previous consensus call is unresolved or unrecoverable; explicit operator authorization required.');
   }
-  if (interrupted(signal, deadlineMs) || session.calls >= (session.request.maxCalls ?? 40))
+  if (interrupted(signal, deadlineMs) || session.calls >= executionCallLimit(session.request))
     throw new Error('Consensus call budget or deadline exhausted.');
   const record: ConsensusCall = {
     id: randomUUID(), cycle: 0, role: stage === 'synthesis' ? 're_synthesis' : 're_vote',
@@ -776,7 +776,7 @@ async function executeNegotiationCycle(
     await notify(session, publish, 'entry', 'negotiation');
     return;
   }
-  if (session.calls + reserveCalls > (session.request.maxCalls ?? 40)) {
+  if (session.calls + reserveCalls > executionCallLimit(session.request)) {
     cycle.outcome = 'skipped';
     cycle.reason = 'Insufficient budget for the complete ' + negotiationCalls +
       '-call negotiation, up to ' + participants.length + ' clarification calls, and ' +
@@ -1010,7 +1010,7 @@ export async function executeConsensus(
         (!state.draft?.sha256 || c.frozenDraftSha256 === state.draft.sha256));
     }).length;
     const requiredCalls = needSynthesis + missingVotes;
-    if ((session.request.maxCalls ?? 40) - session.calls < requiredCalls) {
+    if (executionCallLimit(session.request) - session.calls < requiredCalls) {
       state.status = 'not_assessed';
       state.reason = `Insufficient call budget: ${requiredCalls} new calls are needed after reusing saved synthesis and ballots.`;
       return;
