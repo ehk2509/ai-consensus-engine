@@ -35,9 +35,9 @@ export function groupRelatedObjections(objections: readonly DebateObjection[]): 
     else groups.push([objection]);
   }
   return groups.map(group => ({
-    id: createHash('sha256').update(group.map(item => item.id).join('|')).digest('hex').slice(0, 12),
+    id: createHash('sha256').update(group.map(item => item.id).join('|')).digest('hex'),
     objectionIds: group.map(item => item.id),
-    representativeClaim: group[0]!.claim.slice(0, 200),
+    representativeClaim: group[0]!.claim,
     authorCount: new Set(group.map(item => item.author)).size,
     severity: group.some(item => item.severity === 'high' || item.severity === 'unspecified') ? 'high'
       : group.some(item => item.severity === 'medium') ? 'medium' : 'low',
