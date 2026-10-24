@@ -27,7 +27,7 @@ test('parses provider output without accepting CLI error objects', () => {
   assert.equal(extractResponse('codex', '  proposal  '), '  proposal  ');
   assert.equal(extractResponse('claude', JSON.stringify({ result: 'a response' })), 'a response');
   const agy = (result: object) => [{ event: 'init' }, { event: 'step_update' }, { event: 'result', result }].map((e) => JSON.stringify(e)).join('\n');
-  assert.equal(extractResponse('gemini', agy({ status: 'SUCCESS', response: 'another response\n' })), 'another response');
+  assert.equal(extractResponse('gemini', agy({ status: 'SUCCESS', response: 'another response\n' })), 'another response\n');
   assert.throws(() => extractResponse('gemini', agy({ status: 'ERROR', response: '', error: 'not logged in' })), AgentExecutionError);
   assert.throws(() => extractResponse('gemini', JSON.stringify({ event: 'init' })), AgentExecutionError);
   assert.throws(() => extractResponse('claude', 'not json'), AgentExecutionError);
