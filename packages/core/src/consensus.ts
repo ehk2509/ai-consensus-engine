@@ -158,9 +158,8 @@ export function chooseFacilitator(session: DebateSession): ProviderId {
   const index = parseInt(hash(session.id).slice(0, 8), 16) % session.request.providers.length;
   return session.request.providers[index]!;
 }
-/** The same immutable, bounded, compact ledger is used in synthesis and every ballot.
- * This avoids the previous global-omissions vs. "zero omitted" ballot contradiction.
- * Every record is explicitly an excerpt, not a substitute for its original source.
+/** The same immutable full ledger is supplied to synthesis and every ballot.
+ * Provider-origin incomplete JSON still requires separate evidence-integrity review.
  */
 function sharedObjections(session: DebateSession): ContextPack {
   return packObjections(session.objections);
@@ -413,7 +412,7 @@ function determine(session: DebateSession, state: ConsensusState): void {
   const independentRequired = Math.ceil(nonAuthorVotes.length * 2 / 3);
   if (state.contextOmittedCriticalIds?.length) {
     state.status = 'incomplete';
-    state.reason = 'Critical objection excerpts were excluded from the shared synthesis/voter context; no reliable verdict can be asserted.';
+    state.reason = 'Critical objection records were missing from historical shared context; no reliable verdict can be asserted.';
   } else if (accepted < required || independentAccepts < independentRequired) {
     state.status = 'disputed';
     state.reason = `Accept votes: ${accepted}/${participants.length} (threshold ${required}); non-author accepts: ${independentAccepts}/${nonAuthorVotes.length} (independent threshold ${independentRequired}). The facilitator's self-authored vote is not sufficient for qualified consensus.`;
@@ -1000,7 +999,7 @@ export async function executeConsensus(
     state.contextOmittedCriticalIds = [...shared.omittedCriticalIds];
     state.objectionCoverage = { included: shared.includedIds.length, total: session.objections.length,
       omitted: shared.omittedIds.length, omittedCritical: shared.omittedCriticalIds.length,
-      contextSha256: hash(shared.text), excerpted: true };
+      contextSha256: hash(shared.text), excerpted: false };
     if (shared.omittedCriticalIds.length) {
       state.status = 'incomplete';
       state.reason = `${shared.omittedCriticalIds.length} critical objection records exceeded the shared context budget. No synthesis or voting calls were spent; full review is required.`;
