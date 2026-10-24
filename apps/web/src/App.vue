@@ -66,7 +66,8 @@ const shownEntries = computed(() => (debate.value?.entries ?? []).filter((entry)
 const completed = computed(() => Boolean(debate.value && !['queued', 'running'].includes(debate.value.status)));
 const completedCount = computed(() => debate.value?.entries.filter((entry) => entry.status === 'fulfilled').length ?? 0);
 const estimatedCalls = computed(() => selected.value.length + maxRounds.value * (selected.value.length * (selected.value.length - 1) + 2 * selected.value.length) + (consensusEnabled.value ? selected.value.length + 1 + negotiationCycles.value * (2 * selected.value.length + 1) : 0));
-const maximumFollowupCalls = computed(() => consensusEnabled.value ? selected.value.length * 2 : 0);
+const maximumFollowupCalls = computed(() => consensusEnabled.value
+  ? selected.value.length * 2 + (synthesisFallback.value ? selected.value.length - 1 : 0) : 0);
 
 function markdown(content: string): string {
   return DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
@@ -351,7 +352,7 @@ onBeforeUnmount(closeStream);
             <label class="consensus-toggle"><input v-model="synthesisFallback" type="checkbox" :disabled="pending" /> Try another selected provider if synthesis fails (each fallback uses a model call)</label>
             <label>Negotiation cycles <select v-model.number="negotiationCycles" :disabled="pending" aria-label="Maximum negotiation cycles"><option :value="0">Disabled</option><option :value="1">1 targeted cycle</option><option :value="2">2 targeted cycles</option></select></label>
           </div>
-          <p class="muted">Estimated workload: {{ estimatedCalls }} model calls, excluding up to {{ maximumFollowupCalls }} additional clarification and author-review calls. Synthesis invocations can run up to {{ synthesisTimeoutSeconds }} seconds each; other provider phases have separate bounded timeouts. {{ unlimitedBudget ? 'No session-wide call or time cap is applied.' : 'All stages share your custom call and duration caps.' }} Voting never implies facts have been verified.</p>
+          <p class="muted">Estimated workload: {{ estimatedCalls }} model calls, excluding up to {{ maximumFollowupCalls }} additional synthesis fallback, clarification and author-review calls. Synthesis invocations can run up to {{ synthesisTimeoutSeconds }} seconds each; fallback may invoke up to {{ selected.length - 1 }} extra providers. Other phases have separate bounded timeouts. {{ unlimitedBudget ? 'No session-wide call or time cap is applied.' : 'All stages share your custom call and duration caps.' }} Voting never implies facts have been verified.</p>
           <p v-if="!unlimitedBudget && estimatedCalls + maximumFollowupCalls > maxCalls" class="warning" role="status">The {{ maxCalls }}-call limit may prevent the council from finishing. Increase the limit or reduce debate rounds.</p>
         </div>
         <div class="row footer-row"><span class="muted">Local accounts · Traceable objections, independent votes, no forced agreement.</span><button :disabled="!valid || pending" @click="submit">{{ pending ? 'Council is working…' : mode === 'debate' ? 'Start debate →' : 'Generate perspectives →' }}</button></div>
