@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeApp } from '../apps/api/src/app.ts';
@@ -36,7 +36,8 @@ test('durable queue auto-recovers never-issued queued jobs after worker process 
   try {
     const health = await app.inject({ method: 'GET', url: '/api/health' });
     assert.equal(health.statusCode, 200);
-    assert.equal((health.json() as { version: string }).version, '0.5.4');
+    const packageVersion = (JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+    assert.equal((health.json() as { version: string }).version, packageVersion);
     const finished = await settled(app, session.id);
     assert.equal(finished.status, 'completed');
     assert.equal(finished.entries.filter(e => e.status === 'fulfilled').length, 8);
